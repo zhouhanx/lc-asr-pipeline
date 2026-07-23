@@ -391,6 +391,7 @@ class AdminRepository:
             JOIN tenants tn ON tn.id = f.tenant_id
             LEFT JOIN transcription_jobs j ON j.uploaded_file_id = f.id
             WHERE f.status = 'ready' AND f.archive_type IS NULL
+              AND f.file_kind = 'audio'
             GROUP BY f.id, tn.id
             ORDER BY f.created_at DESC
             """
@@ -422,6 +423,7 @@ class AdminRepository:
             JOIN tenants t ON t.id = f.tenant_id
             JOIN model_providers p ON p.tenant_id = f.tenant_id
             WHERE f.id = %s AND f.status = 'ready' AND f.archive_type IS NULL
+              AND f.file_kind = 'audio'
               AND p.is_enabled
               AND p.deleted_at IS NULL
               AND (
@@ -451,6 +453,7 @@ class AdminRepository:
                 LEFT JOIN membership_roles mr ON mr.membership_id = m.id
                 LEFT JOIN roles r ON r.id = mr.role_id
                 WHERE f.id = %s AND f.status = 'ready' AND f.archive_type IS NULL
+                  AND f.file_kind = 'audio'
                 ORDER BY
                     CASE r.code WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
                     u.created_at

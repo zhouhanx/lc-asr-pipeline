@@ -166,8 +166,8 @@ export async function apiDownload(path: string, token: string): Promise<Blob> {
 export type ModelProvider = {
   id: string
   name: string
-  provider_type: 'local' | 'openai_compatible' | 'stepfun' | 'deepseek'
-  model_kind: 'speech' | 'text'
+  provider_type: 'local' | 'openai_compatible' | 'stepfun' | 'deepseek' | 'paddleocr'
+  model_kind: 'speech' | 'text' | 'ocr'
   base_url: string
   model_name: string
   capabilities: string[]
@@ -180,6 +180,7 @@ export type ModelProvider = {
 export type UploadFileRecord = {
   id: string
   relative_path: string
+  file_kind: 'audio' | 'image' | 'pdf'
   size_bytes: number
   chunk_size: number
   expected_chunks: number
@@ -190,6 +191,7 @@ export type UploadFileRecord = {
 
 export type TranscriptionJob = {
   id: string
+  task_id: string
   uploaded_file_id: string
   provider_id: string
   text_provider_id: string | null
@@ -245,12 +247,89 @@ export type HistoricalFile = {
   id: string
   original_name: string
   relative_path: string
+  file_kind: 'audio' | 'image' | 'pdf'
   size_bytes: number
   sha256: string
   created_at: string
   job_count: number
   latest_job_id: string | null
   latest_job_status: string | null
+}
+
+export type OCRJob = {
+  id: string
+  task_id: string
+  uploaded_file_id: string
+  ocr_provider_id: string
+  text_provider_id: string
+  ocr_provider_name: string
+  text_provider_name: string
+  ocr_provider_deleted: boolean
+  text_provider_deleted: boolean
+  ocr_model_name: string
+  text_model_name: string
+  source_path: string
+  document_kind: 'image' | 'pdf'
+  file_attribute: 'resume' | 'document'
+  status: string
+  progress_percent: number
+  attempts: number
+  refinement_attempts: number
+  max_attempts: number
+  has_ocr_checkpoint: boolean
+  ocr_completed_at: string | null
+  queued_at: string
+  started_at: string | null
+  completed_at: string | null
+  result_id: string | null
+  markdown_text: string | null
+  page_count: number
+  error_message: string | null
+}
+
+export type OCRJobDetail = OCRJob & {
+  raw_result: Record<string, unknown>
+}
+
+export type ResumeProject = {
+  id: string
+  resume_profile_id: string
+  ocr_job_id: string
+  uploaded_file_id: string
+  candidate_name: string
+  phone: string | null
+  email: string | null
+  project_index: number
+  project_name: string
+  company_name: string | null
+  role_name: string | null
+  start_date: string | null
+  end_date: string | null
+  is_current: boolean
+  description: string | null
+  responsibilities: string[]
+  technologies: string[]
+  project_background: string | null
+  project_responsibilities: string[]
+  project_outcomes: string[]
+  architecture_score: number | null
+  architecture_reason: string | null
+  credibility_score: number | null
+  credibility_reason: string | null
+  embellishment_risk_score: number | null
+  embellishment_risk_reason: string | null
+  overall_score: number | null
+  source_excerpt: string | null
+  source_path: string
+  extraction_model_name: string
+  ocr_completed_at: string | null
+  extracted_at: string
+}
+
+export type ResumeProjectSummary = {
+  project_count: number
+  candidate_count: number
+  company_count: number
 }
 
 export type WorkspaceSummary = {

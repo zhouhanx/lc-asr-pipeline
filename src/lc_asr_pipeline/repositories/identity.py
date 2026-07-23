@@ -78,6 +78,22 @@ class IdentityRepository:
             """,
             (tenant["id"],),
         )
+        await connection.execute(
+            """
+            INSERT INTO model_providers (
+                tenant_id, name, provider_type, base_url, model_name,
+                api_key_env, capabilities, is_default, model_kind, is_system
+            )
+            VALUES (
+                %s, 'PaddleOCR 文档识别', 'paddleocr',
+                'https://paddleocr.aistudio-app.com/api/v2/ocr',
+                'PaddleOCR-VL-1.6', 'PADDLE_API',
+                '["ocr", "document_parsing", "markdown", "image", "pdf"]'::jsonb,
+                true, 'ocr', true
+            )
+            """,
+            (tenant["id"],),
+        )
 
         user = await (
             await connection.execute(

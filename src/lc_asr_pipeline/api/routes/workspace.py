@@ -26,21 +26,40 @@ async def workspace_summary(
             await connection.execute(
                 """
                 SELECT
-                    count(*) FILTER (
-                        WHERE status IN ('processing', 'refining')
-                    ) AS running_tasks,
-                    count(*) FILTER (WHERE status = 'queued') AS queued_tasks,
-                    count(*) FILTER (WHERE status = 'completed') AS completed_tasks,
+                    (SELECT count(*) FROM transcription_jobs
+                     WHERE tenant_id = %s
+                       AND status IN ('processing', 'refining'))
+                    + (SELECT count(*) FROM ocr_jobs
+                       WHERE tenant_id = %s
+                         AND status IN ('processing', 'refining'))
+                        AS running_tasks,
+                    (SELECT count(*) FROM transcription_jobs
+                     WHERE tenant_id = %s AND status = 'queued')
+                    + (SELECT count(*) FROM ocr_jobs
+                       WHERE tenant_id = %s AND status = 'queued')
+                        AS queued_tasks,
+                    (SELECT count(*) FROM transcription_jobs
+                     WHERE tenant_id = %s AND status = 'completed')
+                    + (SELECT count(*) FROM ocr_jobs
+                       WHERE tenant_id = %s AND status = 'completed')
+                        AS completed_tasks,
                     (SELECT count(*) FROM model_providers
                      WHERE tenant_id = %s AND is_enabled AND deleted_at IS NULL)
                         AS available_models,
                     (SELECT count(DISTINCT sha256) FROM uploaded_files
                      WHERE tenant_id = %s AND status = 'ready'
                        AND sha256 IS NOT NULL AND archive_type IS NULL) AS historical_files
-                FROM transcription_jobs
-                WHERE tenant_id = %s
                 """,
-                (account.tenant_id, account.tenant_id, account.tenant_id),
+                (
+                    account.tenant_id,
+                    account.tenant_id,
+                    account.tenant_id,
+                    account.tenant_id,
+                    account.tenant_id,
+                    account.tenant_id,
+                    account.tenant_id,
+                    account.tenant_id,
+                ),
             )
         ).fetchone()
     assert row is not None

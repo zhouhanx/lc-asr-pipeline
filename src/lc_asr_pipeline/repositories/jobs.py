@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+from lc_asr_pipeline.core.task_identity import log_task_event
 from lc_asr_pipeline.schemas.refinement import SpeakerMode
+
+logger = logging.getLogger(__name__)
 
 
 class JobRepository:
@@ -59,7 +63,8 @@ class JobRepository:
                 """
                 SELECT count(*) AS count
                 FROM uploaded_files f
-                WHERE f.tenant_id = %s AND f.status = 'ready' AND f.id = ANY(%s)
+                WHERE f.tenant_id = %s AND f.status = 'ready'
+                  AND f.file_kind = 'audio' AND f.id = ANY(%s)
                 """,
                 (tenant_id, file_ids),
             )
@@ -84,6 +89,7 @@ class JobRepository:
                            %s, %s, %s, %s, %s, %s, %s, %s
                     FROM uploaded_files f
                     WHERE f.id = %s AND f.tenant_id = %s AND f.status = 'ready'
+                      AND f.file_kind = 'audio'
                     ON CONFLICT (
                         tenant_id, uploaded_file_id, provider_id, text_provider_id, speaker_mode
                     )
@@ -123,6 +129,14 @@ class JobRepository:
             )
             assert item is not None
             rows.append(item)
+            log_task_event(
+                logger,
+                logging.INFO,
+                event="task_created",
+                kind="asr",
+                task_uuid=row["id"],  # type: ignore[arg-type]
+                status=str(item["status"]),
+            )
         return rows
 
     async def list_for_tenant(

@@ -45,6 +45,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { PasswordChangeSheet } from '@/features/auth/PasswordChangeSheet'
 import { DialogueTranscript } from '@/features/transcription/DialogueTranscript'
 import { TaskModelName } from '@/features/transcription/TaskModelName'
+import { TaskIdentifier } from '@/features/transcription/TaskIdentifier'
 import { apiDownload, apiRequest, ApiError, type ModelProvider } from '@/lib/api'
 
 import { AdminSidebar } from './AdminSidebar'
@@ -613,11 +614,13 @@ function Tasks({
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
+            <TaskIdentifier taskId={selectedJob.task_id} />
             <div className="grid gap-4 border-2 border-border bg-muted/30 p-4 text-sm sm:grid-cols-2">
               <div><p className="text-muted-foreground">语音模型</p><TaskModelName name={selectedJob.provider_name} deleted={selectedJob.provider_deleted} /></div>
               <div><p className="text-muted-foreground">文本模型</p><TaskModelName name={selectedJob.text_provider_name ?? '未配置'} deleted={selectedJob.text_provider_deleted} /></div>
             </div>
             {selectedJob.has_asr_checkpoint && selectedJob.status !== 'completed' && <Alert status="success"><AlertTitle>语音解析结果已保存</AlertTitle><AlertDescription>文本模型失败时可以直接重试文本整理，不会重新调用语音模型。</AlertDescription></Alert>}
+            {selectedJob.status === 'failed' && <Alert variant="destructive"><AlertTitle>执行失败 · {selectedJob.task_id}</AlertTitle><AlertDescription>{selectedJob.error_message || '任务执行失败，请使用任务 ID 检索 Worker 日志。'}</AlertDescription></Alert>}
             {selectedJob.status === 'failed' && <Button variant="outline" onClick={() => onRetry(selectedJob)}><RotateCcw />{selectedJob.has_asr_checkpoint ? '重试文本整理' : '重试语音解析'}</Button>}
             {selectedJob.status === 'completed' && <div className="flex flex-wrap gap-3">{(['txt', 'json', 'srt', 'vtt', 'html'] as const).map((format) => <Button key={format} variant="outline" onClick={() => onDownload(selectedJob, format)}><Download />{format.toUpperCase()}</Button>)}</div>}
             {selectedJob.transcript_text ? <DialogueTranscript transcript={selectedJob.transcript_text} /> : <div className="border-2 border-dashed border-border p-8 text-center text-muted-foreground">暂无转写内容</div>}
@@ -634,7 +637,7 @@ function Tasks({
         {jobs.map((job) => (
           <Card key={job.id} className="border-4 shadow-[4px_4px_0_0_var(--border)]">
             <CardContent className="grid gap-4 p-5 md:grid-cols-[1fr_auto] md:items-center">
-              <div><div className="flex flex-wrap gap-2"><Badge>{job.tenant_name}</Badge><Badge variant="outline">{job.status}</Badge><Badge className={job.visibility === 'public' ? 'bg-green-200 text-foreground' : ''} variant="outline">{job.visibility === 'public' ? <Globe2 /> : <Lock />}{job.visibility === 'public' ? '公开' : '私有'}</Badge></div><p className="mt-3 break-all font-bold">{job.source_path.split('/').at(-1)}</p><p className="mt-1 font-mono text-xs">{job.created_by_name} · {job.created_by_email}</p><p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{job.transcript_text || '暂无转写内容'}</p></div>
+              <div><div className="flex flex-wrap gap-2"><Badge>{job.tenant_name}</Badge><Badge variant="outline">{job.status}</Badge><Badge className={job.visibility === 'public' ? 'bg-green-200 text-foreground' : ''} variant="outline">{job.visibility === 'public' ? <Globe2 /> : <Lock />}{job.visibility === 'public' ? '公开' : '私有'}</Badge></div><p className="mt-3 break-all font-bold">{job.source_path.split('/').at(-1)}</p><p className="mt-1 font-mono text-xs">{job.created_by_name} · {job.created_by_email}</p><TaskIdentifier className="mt-3" taskId={job.task_id} /><p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{job.transcript_text || '暂无转写内容'}</p></div>
               <Button variant="outline" onClick={() => onOpen(job.id)}><FileText />查看转写</Button>
             </CardContent>
           </Card>

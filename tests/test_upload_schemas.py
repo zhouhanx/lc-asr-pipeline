@@ -28,3 +28,40 @@ def test_upload_manifest_rejects_unsafe_paths(path: str) -> None:
             {"name": "unsafe", "files": [{"relative_path": path, "size_bytes": 1}]}
         )
 
+
+def test_upload_manifest_accepts_pdf_and_image_kinds() -> None:
+    payload = UploadBatchCreate.model_validate(
+        {
+            "name": "OCR",
+            "files": [
+                {
+                    "relative_path": "docs/report.pdf",
+                    "size_bytes": 10,
+                    "file_kind": "pdf",
+                },
+                {
+                    "relative_path": "images/page.png",
+                    "size_bytes": 10,
+                    "file_kind": "image",
+                },
+            ],
+        }
+    )
+
+    assert [item.file_kind for item in payload.files] == ["pdf", "image"]
+
+
+def test_upload_manifest_rejects_document_kind_extension_mismatch() -> None:
+    with pytest.raises(ValidationError):
+        UploadBatchCreate.model_validate(
+            {
+                "name": "OCR",
+                "files": [
+                    {
+                        "relative_path": "docs/report.wav",
+                        "size_bytes": 10,
+                        "file_kind": "pdf",
+                    }
+                ],
+            }
+        )

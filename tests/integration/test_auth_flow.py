@@ -213,6 +213,22 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     "unavailable",
                     "misconfigured",
                 }
+                ocr_model = next(
+                    item for item in models.json() if item["model_kind"] == "ocr"
+                )
+                edited_ocr_model = await client.put(
+                    f"/api/v1/models/{ocr_model['id']}",
+                    headers={"Authorization": f"Bearer {auth['access_token']}"},
+                    json={
+                        "name": "Integration PaddleOCR",
+                        "base_url": ocr_model["base_url"],
+                        "model_name": ocr_model["model_name"],
+                    },
+                )
+                assert edited_ocr_model.status_code == 200, edited_ocr_model.text
+                assert edited_ocr_model.json()["name"] == "Integration PaddleOCR"
+                assert edited_ocr_model.json()["is_system"] is True
+                assert edited_ocr_model.json()["has_api_key"] is True
 
                 remote_model = await client.post(
                     "/api/v1/models",
@@ -393,6 +409,8 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 assert jobs.json()[0]["provider_deleted"] is False
                 assert jobs.json()[0]["text_provider_deleted"] is False
                 job_id = jobs.json()[0]["id"]
+                task_id = f"ASR-{job_id}"
+                assert jobs.json()[0]["task_id"] == task_id
                 database = app.state.database
                 async with database.connection() as connection:
                     await connection.execute(
@@ -416,6 +434,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 )
                 assert recovered.status_code == 200, recovered.text
                 assert recovered.json()["status"] == "queued"
+                assert recovered.json()["task_id"] == task_id
                 cancelled = await client.post(
                     f"/api/v1/jobs/{job_id}/cancel",
                     headers={"Authorization": f"Bearer {auth['access_token']}"},
@@ -615,7 +634,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 )
                 assert summary.status_code == 200, summary.text
                 assert summary.json()["completed_tasks"] == 1
-                assert summary.json()["available_models"] == 3
+                assert summary.json()["available_models"] == 4
                 assert summary.json()["historical_files"] >= 1
                 subtitle = await client.get(
                     f"/api/v1/jobs/{job_id}/export/srt",
@@ -638,11 +657,13 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 admin_job = next(item for item in admin_jobs.json() if item["id"] == job_id)
                 assert admin_job["tenant_slug"] == tenant_slug
                 assert admin_job["created_by_email"] == email
+                assert admin_job["task_id"] == task_id
                 admin_job_detail = await client.get(
                     f"/api/v1/admin/jobs/{job_id}",
                     headers={"Authorization": f"Bearer {admin_token}"},
                 )
                 assert admin_job_detail.status_code == 200, admin_job_detail.text
+                assert admin_job_detail.json()["task_id"] == task_id
                 assert admin_job_detail.json()["transcript_text"] == "测试文本"
                 assert admin_job_detail.json()["segments"][0]["text"] == "测试文本"
                 admin_recordings = await client.get(

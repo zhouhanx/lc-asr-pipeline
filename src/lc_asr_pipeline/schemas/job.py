@@ -6,8 +6,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
+from lc_asr_pipeline.core.task_identity import task_reference
 from lc_asr_pipeline.schemas.refinement import SpeakerMode
 
 
@@ -51,6 +52,11 @@ class TranscriptionJobResponse(BaseModel):
     completed_at: datetime | None = None
     transcript_id: UUID | None = None
     transcript_text: str | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def task_id(self) -> str:
+        return task_reference("asr", self.id)
 
 
 class TranscriptSegmentResponse(BaseModel):

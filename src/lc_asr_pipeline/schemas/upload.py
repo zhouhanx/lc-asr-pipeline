@@ -10,6 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 ArchiveType = Literal["zip", "tar", "tar.gz", "tgz"]
+FileKind = Literal["audio", "image", "pdf"]
 
 
 class UploadFileManifest(BaseModel):
@@ -17,6 +18,7 @@ class UploadFileManifest(BaseModel):
     size_bytes: int = Field(gt=0, le=5 * 1024**3)
     media_type: str | None = Field(default=None, max_length=160)
     archive_type: ArchiveType | None = None
+    file_kind: FileKind = "audio"
     sha256: str | None = Field(default=None, pattern=r"^[a-fA-F0-9]{64}$")
 
     @field_validator("relative_path")
@@ -28,6 +30,19 @@ class UploadFileManifest(BaseModel):
         if path.is_absolute() or ".." in path.parts or invalid_part:
             raise ValueError("relative_path must be a safe relative path")
         return str(path)
+
+    @model_validator(mode="after")
+    def validate_kind(self) -> UploadFileManifest:
+        suffix = self.relative_path.casefold()
+        if self.file_kind == "pdf" and not suffix.endswith(".pdf"):
+            raise ValueError("PDF uploads must use the .pdf extension")
+        if self.file_kind == "image" and not suffix.endswith(
+            (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+        ):
+            raise ValueError("Image uploads use an unsupported extension")
+        if self.file_kind != "audio" and self.archive_type is not None:
+            raise ValueError("Document uploads cannot be archives")
+        return self
 
 
 class UploadBatchCreate(BaseModel):
@@ -45,6 +60,7 @@ class UploadBatchCreate(BaseModel):
 class UploadFileResponse(BaseModel):
     id: UUID
     relative_path: str
+    file_kind: FileKind
     size_bytes: int
     chunk_size: int
     expected_chunks: int
@@ -85,6 +101,7 @@ class HistoricalFileResponse(BaseModel):
     id: UUID
     original_name: str
     relative_path: str
+    file_kind: FileKind
     size_bytes: int
     sha256: str
     created_at: datetime

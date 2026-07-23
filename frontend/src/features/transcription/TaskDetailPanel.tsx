@@ -10,6 +10,7 @@ import { apiDownload, apiRequest, type AuthPayload, type TranscriptionJobDetail 
 
 import { DialogueTranscript } from './DialogueTranscript'
 import { TaskModelName } from './TaskModelName'
+import { TaskIdentifier } from './TaskIdentifier'
 
 type Props = { session: AuthPayload; jobId: string; onBack: () => void }
 
@@ -81,19 +82,19 @@ export function TaskDetailPanel({ session, jobId, onBack }: Props) {
       <Button variant="outline" onClick={onBack}><ArrowLeft />返回任务列表</Button>
       {error && <Alert variant="destructive"><AlertTitle>任务错误</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
       <Card className="border-4 shadow-[8px_8px_0_0_var(--border)] [--card-spacing:--spacing(7)]">
-        <CardHeader className="gap-4"><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="font-mono text-xs tracking-[0.2em] text-muted-foreground">TASK / {job.id}</p><CardTitle className="mt-3 break-all font-head text-3xl">{job.source_path.split('/').at(-1)}</CardTitle><CardDescription className="mt-2 break-all">{job.source_path}</CardDescription></div><Badge className={success ? 'bg-green-300 text-foreground' : job.status === 'failed' ? 'bg-red-300 text-foreground' : ''} variant="outline">{success ? <CheckCircle2 /> : job.status === 'failed' || job.status === 'cancelled' ? <XCircle /> : <LoaderCircle className="animate-spin" />}{success ? 'success' : statusLabel(job.status)}</Badge></div></CardHeader>
+        <CardHeader className="gap-4"><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="font-mono text-xs tracking-[0.2em] text-muted-foreground">TRANSCRIPTION TASK</p><CardTitle className="mt-3 break-all font-head text-3xl">{job.source_path.split('/').at(-1)}</CardTitle><CardDescription className="mt-2 break-all">{job.source_path}</CardDescription></div><Badge className={success ? 'bg-green-300 text-foreground' : job.status === 'failed' ? 'bg-red-300 text-foreground' : ''} variant="outline">{success ? <CheckCircle2 /> : job.status === 'failed' || job.status === 'cancelled' ? <XCircle /> : <LoaderCircle className="animate-spin" />}{success ? 'success' : statusLabel(job.status)}</Badge></div><TaskIdentifier taskId={job.task_id} /></CardHeader>
         <CardContent className="space-y-6">
           <div className="grid gap-4 border-2 border-border bg-muted/30 p-5 text-sm sm:grid-cols-2 lg:grid-cols-6"><div><p className="text-muted-foreground">语音模型</p><TaskModelName name={job.provider_name} deleted={job.provider_deleted} /></div><div><p className="text-muted-foreground">文本模型</p><TaskModelName name={job.text_provider_name ?? '未配置'} deleted={job.text_provider_deleted} /></div><div><p className="text-muted-foreground">人数</p><strong>{speakerModeLabel[job.speaker_mode]}</strong></div><div><p className="text-muted-foreground">进度</p><strong>{progress}%</strong></div><div><p className="text-muted-foreground">开始时间</p><strong>{job.started_at ? new Date(job.started_at).toLocaleString() : '等待中'}</strong></div><div><p className="text-muted-foreground">最近报告</p><strong>{updatedAt?.toLocaleTimeString()}</strong></div></div>
           <Progress value={progress} className={!success ? 'animate-pulse' : ''} />
           {job.has_asr_checkpoint && !success && <Alert status="success"><AlertTitle>语音解析结果已保存</AlertTitle><AlertDescription>{job.status === 'failed' ? '可以直接重试文本整理，系统不会再次调用语音模型。' : '原始文本、时间戳和说话人提示已经持久化。'}</AlertDescription></Alert>}
-          {job.error_message && <Alert variant="destructive"><AlertTitle>执行失败</AlertTitle><AlertDescription>{job.error_message}</AlertDescription></Alert>}
+          {job.error_message && <Alert variant="destructive"><AlertTitle>执行失败 · {job.task_id}</AlertTitle><AlertDescription>{job.error_message}<br />请使用以上任务 ID 检索 Worker 日志。</AlertDescription></Alert>}
           <div className="flex flex-wrap items-center gap-3">
             <Button variant={job.visibility === 'public' ? 'default' : 'outline'} onClick={toggleVisibility}>
               {job.visibility === 'public' ? <Globe2 /> : <Lock />}
               {job.visibility === 'public' ? '公开任务' : '私有任务'}
             </Button>
             <p className="text-sm text-muted-foreground">
-              {job.visibility === 'public' ? '所有已登录用户均可查看。' : '仅本组织成员和超级管理员可查看。'}
+              {job.visibility === 'public' ? '所有已登录用户均可查看。' : '仅本组织成员可查看。'}
             </p>
             {job.status === 'failed' && <Button variant="outline" onClick={retry}><RotateCcw />{job.has_asr_checkpoint ? '重试文本整理' : '重试语音解析'}</Button>}
           </div>

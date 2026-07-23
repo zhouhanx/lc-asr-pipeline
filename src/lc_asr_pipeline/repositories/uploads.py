@@ -45,15 +45,21 @@ class UploadRepository:
                     await connection.execute(
                         """
                         SELECT id, size_bytes, chunk_size, expected_chunks,
-                               received_chunks, status
+                               received_chunks, status, file_kind
                         FROM uploaded_files
                         WHERE tenant_id = %s AND sha256 = %s AND size_bytes = %s
+                          AND file_kind = %s
                           AND status = 'ready' AND archive_type IS NULL
                           AND storage_path IS NOT NULL
                         ORDER BY created_at DESC
                         LIMIT 1
                         """,
-                        (tenant_id, item.sha256.lower(), item.size_bytes),
+                        (
+                            tenant_id,
+                            item.sha256.lower(),
+                            item.size_bytes,
+                            item.file_kind,
+                        ),
                     )
                 ).fetchone()
                 if existing is not None:
@@ -71,11 +77,12 @@ class UploadRepository:
                     """
                     INSERT INTO uploaded_files (
                         batch_id, tenant_id, relative_path, original_name, media_type,
-                        archive_type, size_bytes, chunk_size, expected_chunks, sha256
+                        archive_type, file_kind, size_bytes, chunk_size,
+                        expected_chunks, sha256
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id, relative_path, size_bytes, chunk_size,
-                              expected_chunks, received_chunks, status
+                              expected_chunks, received_chunks, status, file_kind
                     """,
                     (
                         batch["id"],
@@ -84,6 +91,7 @@ class UploadRepository:
                         item.relative_path.rsplit("/", 1)[-1],
                         item.media_type,
                         item.archive_type,
+                        item.file_kind,
                         item.size_bytes,
                         chunk_size,
                         expected_chunks,
@@ -117,35 +125,47 @@ class UploadRepository:
         connection: AsyncConnection[dict[str, object]],
         *,
         tenant_id: UUID,
+        file_kind: str | None = None,
     ) -> list[dict[str, Any]]:
         cursor = await connection.execute(
             """
             WITH history AS (
-                SELECT DISTINCT ON (sha256)
-                       id, original_name, relative_path, size_bytes, sha256, created_at
+                SELECT DISTINCT ON (file_kind, sha256)
+                       id, original_name, relative_path, file_kind,
+                       size_bytes, sha256, created_at
                 FROM uploaded_files
                 WHERE tenant_id = %s AND status = 'ready' AND sha256 IS NOT NULL
                   AND archive_type IS NULL AND storage_path IS NOT NULL
-                ORDER BY sha256, created_at DESC
+                  AND (%s::varchar IS NULL OR file_kind = %s::varchar)
+                ORDER BY file_kind, sha256, created_at DESC
             )
-            SELECT h.id, h.original_name, h.relative_path, h.size_bytes,
+            SELECT h.id, h.original_name, h.relative_path, h.file_kind, h.size_bytes,
                    h.sha256, h.created_at,
                    (SELECT count(*) FROM transcription_jobs j
-                    WHERE j.uploaded_file_id = h.id) AS job_count,
+                    WHERE j.uploaded_file_id = h.id)
+                    + (SELECT count(*) FROM ocr_jobs o
+                       WHERE o.uploaded_file_id = h.id) AS job_count,
                    latest.id AS latest_job_id,
                    latest.status AS latest_job_status
             FROM history h
             LEFT JOIN LATERAL (
-                SELECT j.id, j.status
-                FROM transcription_jobs j
-                WHERE j.uploaded_file_id = h.id
-                ORDER BY j.queued_at DESC
+                SELECT candidate.id, candidate.status
+                FROM (
+                    SELECT j.id, j.status, j.queued_at
+                    FROM transcription_jobs j
+                    WHERE j.uploaded_file_id = h.id
+                    UNION ALL
+                    SELECT o.id, o.status, o.queued_at
+                    FROM ocr_jobs o
+                    WHERE o.uploaded_file_id = h.id
+                ) candidate
+                ORDER BY candidate.queued_at DESC
                 LIMIT 1
             ) latest ON true
             ORDER BY h.created_at DESC
             LIMIT 500
             """,
-            (tenant_id,),
+            (tenant_id, file_kind, file_kind),
         )
         return [dict(row) for row in await cursor.fetchall()]
 
@@ -159,8 +179,9 @@ class UploadRepository:
         row = await (
             await connection.execute(
                 """
-                SELECT id, batch_id, relative_path, archive_type, size_bytes, chunk_size,
-                       expected_chunks, received_chunks, sha256, status
+                SELECT id, batch_id, relative_path, media_type, archive_type, file_kind,
+                       size_bytes, chunk_size, expected_chunks, received_chunks,
+                       sha256, status
                 FROM uploaded_files
                 WHERE id = %s AND tenant_id = %s
                 FOR UPDATE
@@ -259,6 +280,12 @@ class UploadRepository:
                       WHERE f.batch_id = b.id
                         AND j.status IN ('queued', 'processing', 'refining', 'completed')
                   )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM ocr_jobs j
+                      JOIN uploaded_files f ON f.id = j.uploaded_file_id
+                      WHERE f.batch_id = b.id
+                        AND j.status IN ('queued', 'processing', 'refining', 'completed')
+                  )
                 FOR UPDATE
                 """,
                 (batch_id, tenant_id),
@@ -321,7 +348,24 @@ class UploadRepository:
             )
         ).fetchone()
         assert jobs is not None
-        if int(str(jobs["processing"])) > 0:
+        ocr_jobs = await (
+            await connection.execute(
+                """
+                SELECT count(*) AS count,
+                       count(*) FILTER (
+                           WHERE status IN ('processing', 'refining')
+                       ) AS processing
+                FROM ocr_jobs
+                WHERE tenant_id = %s AND uploaded_file_id = %s
+                """,
+                (tenant_id, file_id),
+            )
+        ).fetchone()
+        assert ocr_jobs is not None
+        if (
+            int(str(jobs["processing"])) > 0
+            or int(str(ocr_jobs["processing"])) > 0
+        ):
             return {**dict(item), "blocked": True}
 
         deleted_files = 1
@@ -359,6 +403,10 @@ class UploadRepository:
                           SELECT 1 FROM transcription_jobs job
                           WHERE job.uploaded_file_id = uploaded_files.id
                       )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM ocr_jobs job
+                          WHERE job.uploaded_file_id = uploaded_files.id
+                      )
                     FOR UPDATE
                     """,
                     (parent_file_id, tenant_id),
@@ -388,7 +436,7 @@ class UploadRepository:
         return {
             "id": file_id,
             "blocked": False,
-            "deleted_jobs": int(str(jobs["count"])),
+            "deleted_jobs": int(str(jobs["count"])) + int(str(ocr_jobs["count"])),
             "deleted_files": deleted_files,
             "root_file_id": root_file_id,
             "exact_storage_path": exact_storage_path,

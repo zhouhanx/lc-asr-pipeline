@@ -6,10 +6,10 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import { apiRequest, type AuthPayload, type TranscriptionJob } from '@/lib/api'
 
 import { TaskModelName } from './TaskModelName'
+import { TaskIdentifier } from './TaskIdentifier'
 
 type Props = { session: AuthPayload; onOpenTask: (jobId: string) => void }
 
@@ -78,7 +78,7 @@ export function TaskListPanel({ session, onOpenTask }: Props) {
   }
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-7">
+    <div className="mx-auto w-full max-w-[1920px] space-y-7">
       <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open) setPendingDelete(null) }}>
         <AlertDialogContent>
           <AlertDialogTitle>删除这个转写任务？</AlertDialogTitle>
@@ -91,16 +91,17 @@ export function TaskListPanel({ session, onOpenTask }: Props) {
         <div className="border-2 border-border bg-background px-4 py-3 font-mono text-xs shadow-[3px_3px_0_0_var(--border)]">最近报告：{updatedAt?.toLocaleTimeString() ?? '等待中'}</div>
       </div>
       {error && <Alert variant="destructive"><AlertTitle>任务加载失败</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
-      {jobs.length === 0 ? <div className="grid min-h-64 place-items-center border-4 border-dashed border-border bg-muted/40 p-8 text-center font-mono text-sm">暂无转写任务</div> : <div className="grid gap-5 xl:grid-cols-2">{jobs.map((job) => {
+      {jobs.length === 0 ? <div className="grid min-h-64 place-items-center border-4 border-dashed border-border bg-muted/40 p-8 text-center font-mono text-sm">暂无转写任务</div> : <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">{jobs.map((job) => {
         const active = ['queued', 'processing', 'refining'].includes(job.status)
         const progress = job.status === 'completed' ? 100 : job.progress_percent
-        return <Card key={job.id} className="border-4 shadow-[6px_6px_0_0_var(--border)] [--card-spacing:--spacing(6)]">
-          <CardHeader className="gap-3"><div className="flex items-start justify-between gap-4"><div className="min-w-0"><CardTitle className="truncate font-head text-2xl">{job.source_path.split('/').at(-1)}</CardTitle><CardDescription className="mt-2 break-all font-mono text-xs">{job.source_path}</CardDescription></div><Badge className={job.status === 'completed' ? 'bg-green-300 text-foreground' : job.status === 'failed' ? 'bg-red-300 text-foreground' : ''} variant="outline"><StatusIcon status={job.status} />{statusLabel(job.status)}</Badge></div></CardHeader>
-          <CardContent className="space-y-5">
-            <div className="grid gap-3 border-2 border-border bg-muted/30 p-4 font-mono text-sm sm:grid-cols-2"><span>语音模型：<TaskModelName name={job.provider_name} deleted={job.provider_deleted} /></span><span>文本模型：<TaskModelName name={job.text_provider_name ?? '未配置'} deleted={job.text_provider_deleted} /></span><span>人数：<strong>{speakerModeLabel[job.speaker_mode]}</strong></span><span>进度：<strong>{progress}%</strong></span></div>
+        return <Card key={job.id} className="flex h-full flex-col border-4 shadow-[6px_6px_0_0_var(--border)] [--card-spacing:--spacing(5)]">
+          <CardHeader className="gap-3"><div className="space-y-3"><div className="min-w-0"><CardTitle className="truncate font-head text-xl">{job.source_path.split('/').at(-1)}</CardTitle><CardDescription className="mt-2 line-clamp-2 break-all font-mono text-xs">{job.source_path}</CardDescription></div><Badge className={job.status === 'completed' ? 'w-fit bg-green-300 text-foreground' : job.status === 'failed' ? 'w-fit bg-red-300 text-foreground' : 'w-fit'} variant="outline"><StatusIcon status={job.status} />{statusLabel(job.status)}</Badge></div></CardHeader>
+          <CardContent className="flex flex-1 flex-col gap-5">
+            <TaskIdentifier taskId={job.task_id} />
+            <div className="grid gap-2 border-2 border-border bg-muted/30 p-4 font-mono text-sm"><span>语音模型：<TaskModelName name={job.provider_name} deleted={job.provider_deleted} /></span><span>文本模型：<TaskModelName name={job.text_provider_name ?? '未配置'} deleted={job.text_provider_deleted} /></span><span>人数：<strong>{speakerModeLabel[job.speaker_mode]}</strong></span><span>进度：<strong>{progress}%</strong></span></div>
             {job.has_asr_checkpoint && job.status !== 'completed' && <Alert status="success"><AlertTitle>语音解析结果已保存</AlertTitle><AlertDescription>{job.status === 'failed' ? '文本模型调用失败；重试只会重新执行文本整理，不会再次调用语音模型。' : '正在使用已保存的原始文本、时间戳和说话人提示进行文本整理。'}</AlertDescription></Alert>}
-            <Progress value={progress} className={active ? 'animate-pulse' : ''} />
-            <div className="flex flex-wrap gap-3"><Button onClick={() => onOpenTask(job.id)}><Eye />查看独立任务页面</Button><Button variant="destructive" disabled={deleting === job.id} onClick={() => setPendingDelete(job)}><Trash2 />{deleting === job.id ? '删除中…' : '删除'}</Button>{active && <Button variant="outline" onClick={() => action(job, 'cancel')}>取消</Button>}{job.status === 'failed' && <Button variant="outline" onClick={() => action(job, 'retry')}><RotateCcw />{job.has_asr_checkpoint ? '重试文本整理' : '重试语音解析'}</Button>}</div>
+            {job.status === 'failed' && <Alert variant="destructive"><AlertTitle>执行失败 · {job.task_id}</AlertTitle><AlertDescription>{job.error_message || '任务执行失败，请使用任务 ID 检索 Worker 日志。'}</AlertDescription></Alert>}
+            <div className="mt-auto grid gap-3"><Button className="w-full" onClick={() => onOpenTask(job.id)}><Eye />查看独立任务页面</Button><Button className="w-full" variant="destructive" disabled={deleting === job.id} onClick={() => setPendingDelete(job)}><Trash2 />{deleting === job.id ? '删除中…' : '删除'}</Button>{active && <Button className="w-full" variant="outline" onClick={() => action(job, 'cancel')}>取消</Button>}{job.status === 'failed' && <Button className="w-full" variant="outline" onClick={() => action(job, 'retry')}><RotateCcw />{job.has_asr_checkpoint ? '重试文本整理' : '重试语音解析'}</Button>}</div>
           </CardContent>
         </Card>
       })}</div>}

@@ -74,6 +74,8 @@ async def create_model(
             capabilities=(
                 ["transcription", "timestamps"]
                 if payload.model_kind == "speech"
+                else ["ocr", "document_parsing", "markdown", "image", "pdf"]
+                if payload.model_kind == "ocr"
                 else ["chat", "transcript_refinement", "json_output"]
             ),
         )
@@ -168,7 +170,14 @@ async def test_model(
             detail="Referenced API key is not configured",
         )
     base_url = str(provider["base_url"]).rstrip("/")
-    models_url = base_url + ("/models" if base_url.endswith("/v1") else "/v1/models")
+    is_paddleocr = provider["provider_type"] == "paddleocr"
+    models_url = (
+        f"{base_url}/__connection_test__"
+        if is_paddleocr and base_url.endswith("/jobs")
+        else f"{base_url}/jobs/__connection_test__"
+        if is_paddleocr
+        else base_url + ("/models" if base_url.endswith("/v1") else "/v1/models")
+    )
     started = time.monotonic()
     try:
         await enforce_provider_network_policy(
@@ -179,6 +188,8 @@ async def test_model(
                 if provider["provider_type"] == "stepfun"
                 else {"api.deepseek.com"}
                 if provider["provider_type"] == "deepseek"
+                else {"paddleocr.aistudio-app.com"}
+                if is_paddleocr
                 else ()
             ),
         )
@@ -187,7 +198,11 @@ async def test_model(
                 models_url,
                 headers={"Authorization": f"Bearer {api_key}"},
             )
-        response.raise_for_status()
+        if is_paddleocr:
+            if response.status_code in {401, 403} or response.status_code >= 500:
+                response.raise_for_status()
+        else:
+            response.raise_for_status()
     except (httpx.HTTPError, OSError, UnsafeProviderURL):
         return ModelProviderHealthResponse(
             id=provider_id,
@@ -199,7 +214,11 @@ async def test_model(
         id=provider_id,
         status="available",
         latency_ms=round((time.monotonic() - started) * 1000),
-        detail="Provider model discovery succeeded",
+        detail=(
+            "PaddleOCR API authentication endpoint is reachable"
+            if is_paddleocr
+            else "Provider model discovery succeeded"
+        ),
     )
 
 

@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     mlx_asr_api_key: SecretStr = SecretStr("")
     mlx_asr_model: str = "qwen3-asr-1.7b-mlx-8bit"
     asr_request_timeout_seconds: float = 3600.0
+    ocr_request_timeout_seconds: float = 120.0
+    ocr_poll_timeout_seconds: float = 1800.0
     text_model_request_timeout_seconds: float = 600.0
     migrations_path: Path = Path("migrations")
 

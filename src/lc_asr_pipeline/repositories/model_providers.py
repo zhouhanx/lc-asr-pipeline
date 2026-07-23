@@ -44,7 +44,12 @@ class ModelProviderRepository:
                    (api_key_ciphertext IS NOT NULL OR api_key_env IS NOT NULL) AS has_api_key
             FROM model_providers
             WHERE tenant_id = %s AND deleted_at IS NULL
-            ORDER BY model_kind, is_default DESC, name
+            ORDER BY CASE model_kind
+                         WHEN 'speech' THEN 1
+                         WHEN 'text' THEN 2
+                         ELSE 3
+                     END,
+                     is_default DESC, name
             """,
             (tenant_id,),
         )
@@ -107,9 +112,13 @@ class ModelProviderRepository:
                 UPDATE model_providers
                 SET name = %s, base_url = %s, model_name = %s,
                     api_key_ciphertext = COALESCE(%s, api_key_ciphertext),
-                    api_key_env = CASE WHEN %s IS NULL THEN api_key_env ELSE NULL END,
+                    api_key_env = CASE
+                        WHEN %s::bytea IS NULL THEN api_key_env
+                        ELSE NULL
+                    END,
                     updated_at = now()
-                WHERE id = %s AND tenant_id = %s AND NOT is_system
+                WHERE id = %s AND tenant_id = %s
+                  AND (NOT is_system OR model_kind = 'ocr')
                   AND deleted_at IS NULL
                 RETURNING id
                 """,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -13,7 +14,13 @@ import httpx
 from psycopg.types.json import Jsonb
 
 from lc_asr_pipeline.core.config import Settings, get_settings
+from lc_asr_pipeline.core.task_identity import log_task_event
 from lc_asr_pipeline.db.pool import Database
+from lc_asr_pipeline.ocr_worker import (
+    claim_ocr_job,
+    process_ocr_job,
+    recover_stale_ocr_jobs,
+)
 from lc_asr_pipeline.providers.openai_compatible import OpenAICompatibleASRProvider
 from lc_asr_pipeline.providers.stepfun import StepFunASRProvider
 from lc_asr_pipeline.schemas.refinement import (
@@ -34,6 +41,7 @@ from lc_asr_pipeline.services.transcription_chain import build_transcription_cha
 
 HEARTBEAT_SECONDS = 15.0
 STALE_AFTER_SECONDS = 300
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +82,7 @@ async def recover_stale_jobs(database: Database) -> int:
             WHERE status IN ('processing', 'refining')
               AND cancel_requested_at IS NOT NULL
               AND last_heartbeat_at < now() - make_interval(secs => %s)
+            RETURNING id
             """,
             (STALE_AFTER_SECONDS,),
         )
@@ -107,10 +116,32 @@ async def recover_stale_jobs(database: Database) -> int:
             WHERE status IN ('processing', 'refining')
               AND cancel_requested_at IS NULL
               AND last_heartbeat_at < now() - make_interval(secs => %s)
+            RETURNING id, status
             """,
             (STALE_AFTER_SECONDS,),
         )
-    return cancelled.rowcount + requeued.rowcount
+        cancelled_rows = await cancelled.fetchall()
+        requeued_rows = await requeued.fetchall()
+    for row in cancelled_rows:
+        log_task_event(
+            logger,
+            logging.WARNING,
+            event="stale_task_cancelled",
+            kind="asr",
+            task_uuid=row["id"],  # type: ignore[arg-type]
+            status="cancelled",
+        )
+    for row in requeued_rows:
+        log_task_event(
+            logger,
+            logging.WARNING,
+            event="stale_task_recovered",
+            kind="asr",
+            task_uuid=row["id"],  # type: ignore[arg-type]
+            status=str(row["status"]),
+            safe_message="Worker heartbeat expired",
+        )
+    return len(cancelled_rows) + len(requeued_rows)
 
 
 async def claim_job(database: Database) -> ClaimedJob | None:
@@ -171,7 +202,18 @@ async def claim_job(database: Database) -> ClaimedJob | None:
             """,
             (row["id"],),
         )
-    return ClaimedJob(**row)  # type: ignore[arg-type]
+    job = ClaimedJob(**row)  # type: ignore[arg-type]
+    log_task_event(
+        logger,
+        logging.INFO,
+        event="task_claimed",
+        kind="asr",
+        task_uuid=job.id,
+        stage=job.stage,
+        attempt=job.refinement_attempt if job.stage == "refinement" else job.attempt,
+        status="refining" if job.stage == "refinement" else "processing",
+    )
+    return job
 
 
 async def _heartbeat_until_cancel(database: Database, job: ClaimedJob) -> bool:
@@ -198,7 +240,7 @@ async def _heartbeat_until_cancel(database: Database, job: ClaimedJob) -> bool:
 
 async def _mark_cancelled(database: Database, job: ClaimedJob) -> None:
     async with database.connection() as connection:
-        await connection.execute(
+        changed = await connection.execute(
             """
             UPDATE transcription_jobs
             SET status = 'cancelled', completed_at = now(), last_heartbeat_at = NULL,
@@ -208,6 +250,17 @@ async def _mark_cancelled(database: Database, job: ClaimedJob) -> None:
               AND attempts = %s
             """,
             (job.id, job.attempt),
+        )
+    if changed.rowcount == 1:
+        log_task_event(
+            logger,
+            logging.INFO,
+            event="task_cancelled",
+            kind="asr",
+            task_uuid=job.id,
+            stage=job.stage,
+            attempt=job.attempt,
+            status="cancelled",
         )
 
 
@@ -231,11 +284,7 @@ async def persist_result(
                 (job.id,),
             )
         ).fetchone()
-        if (
-            state is None
-            or state["status"] != "refining"
-            or state["attempts"] != job.attempt
-        ):
+        if state is None or state["status"] != "refining" or state["attempts"] != job.attempt:
             return
         if state["cancel_requested_at"] is not None:
             await connection.execute(
@@ -244,6 +293,16 @@ async def persist_result(
                     last_heartbeat_at = NULL, updated_at = now() WHERE id = %s
                 """,
                 (job.id,),
+            )
+            log_task_event(
+                logger,
+                logging.INFO,
+                event="task_cancelled",
+                kind="asr",
+                task_uuid=job.id,
+                stage=job.stage,
+                attempt=job.attempt,
+                status="cancelled",
             )
             return
         transcript = await (
@@ -282,11 +341,15 @@ async def persist_result(
                 ) VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    transcript["id"], index, segment.start, segment.end,
-                    segment.speaker, segment.text,
+                    transcript["id"],
+                    index,
+                    segment.start,
+                    segment.end,
+                    segment.speaker,
+                    segment.text,
                 ),
             )
-        await connection.execute(
+        changed = await connection.execute(
             """
             UPDATE transcription_jobs
             SET status = 'completed', completed_at = now(), progress_percent = 100,
@@ -295,6 +358,17 @@ async def persist_result(
             WHERE id = %s
             """,
             (job.id,),
+        )
+    if changed.rowcount == 1:
+        log_task_event(
+            logger,
+            logging.INFO,
+            event="task_completed",
+            kind="asr",
+            task_uuid=job.id,
+            stage="refinement",
+            attempt=job.refinement_attempt,
+            status="completed",
         )
 
 
@@ -329,6 +403,16 @@ async def persist_asr_checkpoint(
         ).fetchone()
     if row is None:
         raise RuntimeError("Job lease was lost before the ASR checkpoint was saved")
+    log_task_event(
+        logger,
+        logging.INFO,
+        event="task_stage_completed",
+        kind="asr",
+        task_uuid=job.id,
+        stage="asr",
+        attempt=job.attempt,
+        status="refining",
+    )
     return int(str(row["refinement_attempts"]))
 
 
@@ -417,9 +501,7 @@ async def fail_job(database: Database, job: ClaimedJob, exc: Exception) -> None:
             return
         has_asr_checkpoint = state["asr_result_checkpoint"] is not None
         stage_attempt = (
-            int(str(state["refinement_attempts"]))
-            if has_asr_checkpoint
-            else job.attempt
+            int(str(state["refinement_attempts"])) if has_asr_checkpoint else job.attempt
         )
         retry = _is_transient(exc) and stage_attempt < job.max_attempts
         delay = min(300, 2 ** min(stage_attempt, 8))
@@ -432,7 +514,7 @@ async def fail_job(database: Database, job: ClaimedJob, exc: Exception) -> None:
             if has_asr_checkpoint
             else "Speech model request failed"
         )
-        await connection.execute(
+        changed = await connection.execute(
             """
             UPDATE transcription_jobs
             SET status = %s,
@@ -455,6 +537,23 @@ async def fail_job(database: Database, job: ClaimedJob, exc: Exception) -> None:
                 job.id,
                 job.attempt,
             ),
+        )
+    if changed.rowcount == 1:
+        final_status = (
+            "refining" if retry and has_asr_checkpoint else "queued" if retry else "failed"
+        )
+        log_task_event(
+            logger,
+            logging.WARNING if retry else logging.ERROR,
+            event="task_retry_scheduled" if retry else "task_failed",
+            kind="asr",
+            task_uuid=job.id,
+            stage="refinement" if has_asr_checkpoint else "asr",
+            attempt=stage_attempt,
+            status=final_status,
+            retry=retry,
+            error=exc,
+            safe_message=message,
         )
 
 
@@ -539,20 +638,32 @@ async def run_worker(*, once: bool, poll_seconds: float) -> None:
     database = Database(settings)
     await database.open()
     await recover_stale_jobs(database)
+    await recover_stale_ocr_jobs(database)
     try:
         while True:
             job = await claim_job(database)
             if job is not None:
                 await process_job(database, settings, job)
+            ocr_job = None
+            if job is None:
+                ocr_job = await claim_ocr_job(database)
+                if ocr_job is not None:
+                    await process_ocr_job(database, settings, ocr_job)
             if once:
                 return
-            if job is None:
+            if job is None and ocr_job is None:
                 await asyncio.sleep(poll_seconds)
     finally:
         await database.close()
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(description="Run the LC ASR transcription worker")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--poll-seconds", type=float, default=2.0)

@@ -1,9 +1,14 @@
 import {
   Bot,
+  BriefcaseBusiness,
   Boxes,
+  FileImage,
   FileClock,
+  FileScan,
+  FileText,
   FileUp,
   Globe2,
+  FolderKanban,
   LayoutDashboard,
   ListTodo,
   Settings,
@@ -19,6 +24,7 @@ export type NavigationItem = {
   permission: string
   icon: LucideIcon
   badge?: string
+  children?: NavigationItem[]
 }
 
 export type NavigationGroup = {
@@ -43,6 +49,13 @@ export const navigationGroups: NavigationGroup[] = [
         description: '上传录音并创建独立任务',
         permission: 'jobs:read',
         icon: FileUp,
+      },
+      {
+        id: 'ocr',
+        label: 'OCR识别',
+        description: '上传图片或 PDF 并创建 OCR 任务',
+        permission: 'jobs:read',
+        icon: FileScan,
       },
       {
         id: 'models',
@@ -72,11 +85,57 @@ export const navigationGroups: NavigationGroup[] = [
         icon: ListTodo,
       },
       {
+        id: 'ocr-tasks',
+        label: 'OCR任务',
+        description: '查看图片与 PDF 解析结果',
+        permission: 'jobs:read',
+        icon: FileScan,
+      },
+      {
         id: 'history',
         label: '历史文件',
         description: '复用文件并选择其他模型解析',
         permission: 'jobs:read',
         icon: FileClock,
+        children: [
+          {
+            id: 'history-video',
+            label: 'VIDEO',
+            description: '音频历史文件',
+            permission: 'jobs:read',
+            icon: FileUp,
+          },
+          {
+            id: 'history-picture',
+            label: 'PICTURE',
+            description: '图片历史文件',
+            permission: 'jobs:read',
+            icon: FileImage,
+          },
+          {
+            id: 'history-pdf',
+            label: 'PDF',
+            description: 'PDF 历史文件',
+            permission: 'jobs:read',
+            icon: FileText,
+          },
+        ],
+      },
+      {
+        id: 'projects',
+        label: '项目',
+        description: '复用结构化项目数据',
+        permission: 'jobs:read',
+        icon: FolderKanban,
+        children: [
+          {
+            id: 'resume-projects',
+            label: '数据简历项目',
+            description: '从简历 OCR 中抽取的项目经历',
+            permission: 'jobs:read',
+            icon: BriefcaseBusiness,
+          },
+        ],
       },
       {
         id: 'public-tasks',
@@ -115,4 +174,6 @@ export const navigationGroups: NavigationGroup[] = [
   },
 ]
 
-export const allNavigationItems = navigationGroups.flatMap((group) => group.items)
+export const allNavigationItems = navigationGroups.flatMap((group) =>
+  group.items.flatMap((item) => item.children ?? [item]),
+)

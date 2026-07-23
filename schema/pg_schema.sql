@@ -134,9 +134,9 @@ CREATE TABLE model_providers (
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     name varchar(120) NOT NULL,
     provider_type varchar(32) NOT NULL
-        CHECK (provider_type IN ('local', 'openai_compatible', 'stepfun', 'deepseek')),
+        CHECK (provider_type IN ('local', 'openai_compatible', 'stepfun', 'deepseek', 'paddleocr')),
     model_kind varchar(16) NOT NULL DEFAULT 'speech'
-        CHECK (model_kind IN ('speech', 'text')),
+        CHECK (model_kind IN ('speech', 'text', 'ocr')),
     base_url text NOT NULL,
     model_name varchar(160) NOT NULL,
     api_key_env varchar(120),
@@ -152,6 +152,7 @@ CREATE TABLE model_providers (
     CHECK (
         (model_kind = 'speech' AND provider_type IN ('local', 'openai_compatible', 'stepfun'))
         OR (model_kind = 'text' AND provider_type IN ('openai_compatible', 'deepseek'))
+        OR (model_kind = 'ocr' AND provider_type = 'paddleocr')
     )
 );
 
@@ -188,6 +189,8 @@ CREATE TABLE uploaded_files (
     media_type varchar(160),
     archive_type varchar(16)
         CHECK (archive_type IS NULL OR archive_type IN ('zip', 'tar', 'tar.gz', 'tgz')),
+    file_kind varchar(16) NOT NULL DEFAULT 'audio'
+        CHECK (file_kind IN ('audio', 'image', 'pdf')),
     size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
     chunk_size integer NOT NULL CHECK (chunk_size BETWEEN 1048576 AND 67108864),
     expected_chunks integer NOT NULL CHECK (expected_chunks >= 1),
@@ -285,6 +288,152 @@ CREATE INDEX transcription_jobs_public_time_idx
 CREATE INDEX uploaded_files_admin_recordings_idx
     ON uploaded_files(tenant_id, created_at DESC)
     WHERE status = 'ready' AND archive_type IS NULL;
+CREATE INDEX uploaded_files_tenant_kind_time_idx
+    ON uploaded_files(tenant_id, file_kind, created_at DESC)
+    WHERE status = 'ready' AND archive_type IS NULL;
+
+CREATE TABLE ocr_jobs (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    created_by uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    uploaded_file_id uuid NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    ocr_provider_id uuid NOT NULL REFERENCES model_providers(id) ON DELETE RESTRICT,
+    text_provider_id uuid NOT NULL REFERENCES model_providers(id) ON DELETE RESTRICT,
+    ocr_provider_type_snapshot varchar(32) NOT NULL
+        CHECK (ocr_provider_type_snapshot = 'paddleocr'),
+    ocr_base_url_snapshot text NOT NULL,
+    ocr_model_name_snapshot varchar(160) NOT NULL,
+    ocr_api_key_env_snapshot varchar(120),
+    ocr_api_key_ciphertext_snapshot bytea,
+    ocr_capabilities_snapshot jsonb NOT NULL,
+    text_provider_type_snapshot varchar(32) NOT NULL
+        CHECK (text_provider_type_snapshot IN ('openai_compatible', 'deepseek')),
+    text_base_url_snapshot text NOT NULL,
+    text_model_name_snapshot varchar(160) NOT NULL,
+    text_api_key_ciphertext_snapshot bytea NOT NULL,
+    text_capabilities_snapshot jsonb NOT NULL,
+    document_kind varchar(16) NOT NULL
+        CHECK (document_kind IN ('image', 'pdf')),
+    file_attribute varchar(16) NOT NULL DEFAULT 'document'
+        CHECK (file_attribute IN ('resume', 'document')),
+    status varchar(24) NOT NULL DEFAULT 'queued'
+        CHECK (status IN (
+            'queued', 'processing', 'refining', 'completed', 'failed', 'cancelled'
+        )),
+    progress_percent smallint NOT NULL DEFAULT 0
+        CHECK (progress_percent BETWEEN 0 AND 100),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    refinement_attempts integer NOT NULL DEFAULT 0
+        CHECK (refinement_attempts >= 0),
+    max_attempts smallint NOT NULL DEFAULT 3
+        CHECK (max_attempts BETWEEN 1 AND 10),
+    next_attempt_at timestamptz,
+    last_heartbeat_at timestamptz,
+    cancel_requested_at timestamptz,
+    error_code varchar(80),
+    error_message text,
+    provider_job_id text,
+    ocr_result_checkpoint jsonb,
+    queued_at timestamptz NOT NULL DEFAULT now(),
+    started_at timestamptz,
+    ocr_completed_at timestamptz,
+    completed_at timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT ocr_jobs_checkpoint_check
+        CHECK (
+            ocr_result_checkpoint IS NULL
+            OR jsonb_typeof(ocr_result_checkpoint) = 'object'
+        ),
+    CONSTRAINT ocr_jobs_checkpoint_time_check
+        CHECK (
+            (ocr_result_checkpoint IS NULL AND ocr_completed_at IS NULL)
+            OR (ocr_result_checkpoint IS NOT NULL AND ocr_completed_at IS NOT NULL)
+        ),
+    CONSTRAINT ocr_jobs_source_provider_profile_key
+        UNIQUE (
+            tenant_id, uploaded_file_id, ocr_provider_id, text_provider_id,
+            file_attribute
+        )
+);
+
+CREATE TABLE ocr_results (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    job_id uuid NOT NULL UNIQUE REFERENCES ocr_jobs(id) ON DELETE CASCADE,
+    uploaded_file_id uuid NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    ocr_provider_id uuid NOT NULL REFERENCES model_providers(id) ON DELETE RESTRICT,
+    text_provider_id uuid NOT NULL REFERENCES model_providers(id) ON DELETE RESTRICT,
+    markdown_text text NOT NULL,
+    page_count integer NOT NULL DEFAULT 0 CHECK (page_count >= 0),
+    raw_result jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE resume_profiles (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    ocr_job_id uuid NOT NULL UNIQUE REFERENCES ocr_jobs(id) ON DELETE CASCADE,
+    ocr_result_id uuid NOT NULL UNIQUE REFERENCES ocr_results(id) ON DELETE CASCADE,
+    uploaded_file_id uuid NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    candidate_name text NOT NULL DEFAULT '未识别姓名',
+    phone text,
+    email text,
+    current_company text,
+    extraction_model_name_snapshot varchar(160) NOT NULL,
+    raw_profile jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(raw_profile) = 'object'),
+    extracted_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE resume_projects (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    resume_profile_id uuid NOT NULL
+        REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    ocr_job_id uuid NOT NULL REFERENCES ocr_jobs(id) ON DELETE CASCADE,
+    uploaded_file_id uuid NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    project_index integer NOT NULL CHECK (project_index >= 0),
+    project_name text NOT NULL,
+    company_name text,
+    role_name text,
+    start_date_text varchar(40),
+    end_date_text varchar(40),
+    is_current boolean NOT NULL DEFAULT false,
+    description text,
+    responsibilities text[] NOT NULL DEFAULT '{}',
+    technologies text[] NOT NULL DEFAULT '{}',
+    project_background text,
+    project_responsibilities text[] NOT NULL DEFAULT '{}',
+    project_outcomes text[] NOT NULL DEFAULT '{}',
+    architecture_score smallint
+        CHECK (architecture_score BETWEEN 1 AND 10),
+    architecture_reason text,
+    credibility_score smallint
+        CHECK (credibility_score BETWEEN 1 AND 10),
+    credibility_reason text,
+    embellishment_risk_score smallint
+        CHECK (embellishment_risk_score BETWEEN 1 AND 10),
+    embellishment_risk_reason text,
+    overall_score numeric(3,1)
+        GENERATED ALWAYS AS (
+            round(
+                (
+                    architecture_score
+                    + credibility_score
+                    + (11 - embellishment_risk_score)
+                )::numeric / 3,
+                1
+            )
+        ) STORED,
+    source_excerpt text,
+    raw_project jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(raw_project) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT resume_projects_profile_index_key
+        UNIQUE (resume_profile_id, project_index)
+);
 
 CREATE TABLE transcripts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -325,3 +474,19 @@ CREATE INDEX transcription_jobs_stale_idx ON transcription_jobs(last_heartbeat_a
 CREATE INDEX transcription_jobs_tenant_time_idx
     ON transcription_jobs(tenant_id, queued_at DESC);
 CREATE INDEX transcripts_source_idx ON transcripts(tenant_id, uploaded_file_id);
+CREATE INDEX ocr_jobs_claim_idx
+    ON ocr_jobs(status, next_attempt_at, queued_at)
+    WHERE status IN ('queued', 'refining');
+CREATE INDEX ocr_jobs_stale_idx ON ocr_jobs(last_heartbeat_at)
+    WHERE status IN ('processing', 'refining');
+CREATE INDEX ocr_jobs_tenant_time_idx ON ocr_jobs(tenant_id, queued_at DESC);
+CREATE INDEX ocr_results_source_idx ON ocr_results(tenant_id, uploaded_file_id);
+CREATE INDEX resume_profiles_tenant_candidate_idx
+    ON resume_profiles(tenant_id, candidate_name, extracted_at DESC);
+CREATE INDEX resume_projects_tenant_time_idx
+    ON resume_projects(tenant_id, start_date_text, end_date_text);
+CREATE INDEX resume_projects_company_idx
+    ON resume_projects(tenant_id, company_name)
+    WHERE company_name IS NOT NULL;
+CREATE INDEX resume_projects_source_idx
+    ON resume_projects(tenant_id, uploaded_file_id, ocr_job_id);

@@ -8,24 +8,33 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
 
-ModelKind = Literal["speech", "text"]
-ProviderType = Literal["local", "openai_compatible", "stepfun", "deepseek"]
+ModelKind = Literal["speech", "text", "ocr"]
+ProviderType = Literal[
+    "local", "openai_compatible", "stepfun", "deepseek", "paddleocr"
+]
 
 
 class ModelProviderCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     model_kind: ModelKind
-    provider_type: Literal["openai_compatible", "stepfun", "deepseek"]
+    provider_type: Literal[
+        "openai_compatible", "stepfun", "deepseek", "paddleocr"
+    ]
     base_url: HttpUrl
     model_name: str = Field(min_length=1, max_length=160)
     api_key: SecretStr = Field(min_length=1, max_length=4096)
 
     @model_validator(mode="after")
     def validate_kind_and_provider(self) -> ModelProviderCreate:
-        if self.model_kind == "speech" and self.provider_type == "deepseek":
-            raise ValueError("DeepSeek is a text model provider")
-        if self.model_kind == "text" and self.provider_type == "stepfun":
-            raise ValueError("StepFun ASR is a speech model provider")
+        allowed = {
+            "speech": {"openai_compatible", "stepfun"},
+            "text": {"openai_compatible", "deepseek"},
+            "ocr": {"paddleocr"},
+        }
+        if self.provider_type not in allowed[self.model_kind]:
+            raise ValueError(
+                f"{self.provider_type} is not valid for {self.model_kind} models"
+            )
         return self
 
 

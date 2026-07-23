@@ -7,7 +7,7 @@ import hmac
 import os
 import shutil
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, Security, status
@@ -39,13 +39,40 @@ def _file_root(data_path: Path, tenant_id: UUID, file_id: UUID) -> Path:
     return data_path.resolve() / "uploads" / str(tenant_id) / str(file_id)
 
 
+def _validate_file_signature(path: Path, file_kind: str) -> None:
+    if file_kind == "audio":
+        return
+    with path.open("rb") as source:
+        header = source.read(16)
+    if file_kind == "pdf":
+        valid = header.startswith(b"%PDF-")
+    else:
+        valid = (
+            header.startswith(b"\x89PNG\r\n\x1a\n")
+            or header.startswith(b"\xff\xd8\xff")
+            or header.startswith(b"BM")
+            or header.startswith((b"II*\x00", b"MM\x00*"))
+            or (header.startswith(b"RIFF") and header[8:12] == b"WEBP")
+        )
+    if not valid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Uploaded {file_kind} file signature is invalid",
+        )
+
+
 @router.get("/history", response_model=list[HistoricalFileResponse])
 async def upload_history(
     account: UploadReader,
     database: DatabaseDependency,
+    file_kind: Literal["audio", "image", "pdf"] | None = None,
 ) -> list[HistoricalFileResponse]:
     async with database.connection() as connection:
-        rows = await repository.list_history(connection, tenant_id=account.tenant_id)
+        rows = await repository.list_history(
+            connection,
+            tenant_id=account.tenant_id,
+            file_kind=file_kind,
+        )
     return [HistoricalFileResponse.model_validate(row) for row in rows]
 
 
@@ -280,7 +307,7 @@ async def complete_upload(
         source_dir = root / "source"
         source_dir.mkdir(parents=True, exist_ok=True)
         suffix = Path(str(item["relative_path"])).suffix
-        final_path = source_dir / f"audio{suffix}"
+        final_path = source_dir / f"source{suffix}"
         temporary_path = source_dir / ".assembling.tmp"
         digest = hashlib.sha256()
         assembled = 0
@@ -297,6 +324,7 @@ async def complete_upload(
             expected_sha = item["sha256"]
             if expected_sha and not hmac.compare_digest(str(expected_sha), digest.hexdigest()):
                 raise HTTPException(status_code=422, detail="Assembled file checksum mismatch")
+            _validate_file_signature(temporary_path, str(item["file_kind"]))
             os.replace(temporary_path, final_path)
             ready_file_ids = [file_id]
             if item["archive_type"]:

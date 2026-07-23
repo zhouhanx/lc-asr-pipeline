@@ -15,6 +15,7 @@ import {
 
 import { DialogueTranscript } from './DialogueTranscript'
 import { TaskModelName } from './TaskModelName'
+import { TaskIdentifier } from './TaskIdentifier'
 
 export function PublicTaskPanel({ session }: { session: AuthPayload }) {
   const [jobs, setJobs] = useState<PublicTranscriptionJob[]>([])
@@ -76,6 +77,7 @@ export function PublicTaskPanel({ session }: { session: AuthPayload }) {
             </div>
           </CardHeader>
           <CardContent className="space-y-6">
+            <TaskIdentifier taskId={selected.task_id} />
             <div className="grid gap-4 border-2 border-border bg-muted/30 p-4 text-sm sm:grid-cols-2">
               <div><p className="text-muted-foreground">语音模型</p><TaskModelName name={selected.provider_name} deleted={selected.provider_deleted} /></div>
               <div><p className="text-muted-foreground">文本模型</p><TaskModelName name={selected.text_provider_name ?? '未配置'} deleted={selected.text_provider_deleted} /></div>
@@ -118,6 +120,7 @@ export function PublicTaskPanel({ session }: { session: AuthPayload }) {
                 <CardDescription>{new Date(job.queued_at).toLocaleString()}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <TaskIdentifier taskId={job.task_id} />
                 <p className="line-clamp-3 min-h-16 text-sm leading-6 text-muted-foreground">{job.transcript_text || '暂无转写内容'}</p>
                 <Button className="w-full" variant="outline" onClick={() => openTask(job.id)}><FileText />查看公开转写</Button>
               </CardContent>

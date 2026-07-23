@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { Bell, ChevronDown, CircleHelp, KeyRound, LogOut, ShieldCheck } from 'lucide-react'
 
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -40,9 +39,6 @@ export function WorkspaceHeader({ session, title, onLogout }: WorkspaceHeaderPro
         </div>
       </div>
       <div className="flex items-center gap-1.5">
-        <Badge className="hidden bg-accent sm:inline-flex" variant="outline">
-          PG17 ONLINE
-        </Badge>
         <Button variant="ghost" size="icon-sm" aria-label="帮助">
           <CircleHelp />
         </Button>

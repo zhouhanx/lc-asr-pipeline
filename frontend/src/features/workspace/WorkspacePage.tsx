@@ -6,6 +6,10 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAuth } from '@/features/auth/useAuth'
 import { ModelPanel } from '@/features/models/ModelPanel'
+import { OCRSubmissionPanel } from '@/features/ocr/OCRSubmissionPanel'
+import { OCRTaskDetailPanel } from '@/features/ocr/OCRTaskDetailPanel'
+import { OCRTaskListPanel } from '@/features/ocr/OCRTaskListPanel'
+import { ResumeProjectPanel } from '@/features/projects/ResumeProjectPanel'
 import { FileHistoryPanel } from '@/features/transcription/FileHistoryPanel'
 import { PublicTaskPanel } from '@/features/transcription/PublicTaskPanel'
 import { SubmissionPanel } from '@/features/transcription/SubmissionPanel'
@@ -39,14 +43,15 @@ function AuthenticatedWorkspace({ session, onLogout }: AuthenticatedWorkspacePro
   )
   const pathParts = location.pathname.split('/').filter(Boolean)
   const jobId = pathParts[1] === 'tasks' && pathParts[2] ? pathParts[2] : null
-  const requestedItem = jobId ? 'tasks' : (pathParts[1] ?? 'overview')
+  const ocrJobId = pathParts[1] === 'ocr-tasks' && pathParts[2] ? pathParts[2] : null
+  const requestedItem = jobId ? 'tasks' : ocrJobId ? 'ocr-tasks' : (pathParts[1] ?? 'overview')
   const activeItem = allowedItems.some((item) => item.id === requestedItem)
     ? requestedItem
     : (allowedItems[0]?.id ?? 'overview')
   const selected = allowedItems.find((item) => item.id === activeItem) ?? allowedItems[0]
 
   const selectItem = (item: string) => {
-    navigate(`/workspace/${item}`)
+    navigate(`/workspace/${item === 'history' ? 'history-video' : item}`)
   }
 
   return (
@@ -54,18 +59,30 @@ function AuthenticatedWorkspace({ session, onLogout }: AuthenticatedWorkspacePro
       <SidebarProvider>
         <AppSidebar session={session} activeItem={activeItem} onSelect={selectItem} />
         <SidebarInset>
-          <WorkspaceHeader session={session} title={jobId ? '任务详情' : (selected?.label ?? '工作台')} onLogout={onLogout} />
+          <WorkspaceHeader session={session} title={jobId ? '任务详情' : ocrJobId ? 'OCR 任务详情' : (selected?.label ?? '工作台')} onLogout={onLogout} />
           <main className="pixel-grid flex-1 overflow-y-auto p-4 sm:p-6">
             {activeItem === 'overview' ? (
               <OverviewPanel session={session} onNavigate={selectItem} />
             ) : activeItem === 'submit' ? (
-              <SubmissionPanel session={session} onOpenTasks={() => navigate('/workspace/tasks')} onOpenHistory={() => navigate('/workspace/history')} />
+              <SubmissionPanel session={session} onOpenTasks={() => navigate('/workspace/tasks')} onOpenHistory={() => navigate('/workspace/history-video')} />
+            ) : activeItem === 'ocr' ? (
+              <OCRSubmissionPanel session={session} onOpenTasks={() => navigate('/workspace/ocr-tasks')} onOpenHistory={(kind) => navigate(`/workspace/history-${kind === 'image' ? 'picture' : 'pdf'}`)} />
             ) : activeItem === 'tasks' && jobId ? (
               <TaskDetailPanel session={session} jobId={jobId} onBack={() => navigate('/workspace/tasks')} />
             ) : activeItem === 'tasks' ? (
               <TaskListPanel session={session} onOpenTask={(id) => navigate(`/workspace/tasks/${id}`)} />
-            ) : activeItem === 'history' ? (
-              <FileHistoryPanel session={session} onOpenTask={(id) => navigate(`/workspace/tasks/${id}`)} />
+            ) : activeItem === 'ocr-tasks' && ocrJobId ? (
+              <OCRTaskDetailPanel session={session} jobId={ocrJobId} onBack={() => navigate('/workspace/ocr-tasks')} />
+            ) : activeItem === 'ocr-tasks' ? (
+              <OCRTaskListPanel session={session} onOpenTask={(id) => navigate(`/workspace/ocr-tasks/${id}`)} />
+            ) : activeItem === 'history-video' ? (
+              <FileHistoryPanel session={session} fileKind="audio" onOpenTask={(id) => navigate(`/workspace/tasks/${id}`)} onOpenOCRTask={(id) => navigate(`/workspace/ocr-tasks/${id}`)} />
+            ) : activeItem === 'history-picture' ? (
+              <FileHistoryPanel session={session} fileKind="image" onOpenTask={(id) => navigate(`/workspace/tasks/${id}`)} onOpenOCRTask={(id) => navigate(`/workspace/ocr-tasks/${id}`)} />
+            ) : activeItem === 'history-pdf' ? (
+              <FileHistoryPanel session={session} fileKind="pdf" onOpenTask={(id) => navigate(`/workspace/tasks/${id}`)} onOpenOCRTask={(id) => navigate(`/workspace/ocr-tasks/${id}`)} />
+            ) : activeItem === 'resume-projects' ? (
+              <ResumeProjectPanel session={session} onOpenOCRTask={(id) => navigate(`/workspace/ocr-tasks/${id}`)} />
             ) : activeItem === 'public-tasks' ? (
               <PublicTaskPanel session={session} />
             ) : activeItem === 'models' ? (
