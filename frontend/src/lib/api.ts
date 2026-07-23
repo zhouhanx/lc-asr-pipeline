@@ -208,7 +208,10 @@ export type TranscriptionJob = {
   speaker_mode: 'single' | 'double' | 'multiple'
   progress_percent: number
   attempts: number
+  refinement_attempts: number
   max_attempts: number
+  has_asr_checkpoint: boolean
+  asr_completed_at: string | null
   queued_at: string
   started_at: string | null
   completed_at: string | null

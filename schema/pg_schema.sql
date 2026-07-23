@@ -234,7 +234,9 @@ CREATE TABLE transcription_jobs (
     text_api_key_ciphertext_snapshot bytea,
     text_capabilities_snapshot jsonb,
     status varchar(24) NOT NULL DEFAULT 'queued'
-        CHECK (status IN ('queued', 'processing', 'completed', 'failed', 'cancelled')),
+        CHECK (status IN (
+            'queued', 'processing', 'refining', 'completed', 'failed', 'cancelled'
+        )),
     visibility varchar(16) NOT NULL DEFAULT 'private'
         CHECK (visibility IN ('private', 'public')),
     language varchar(40),
@@ -243,6 +245,7 @@ CREATE TABLE transcription_jobs (
         CHECK (speaker_mode IN ('single', 'double', 'multiple')),
     options jsonb NOT NULL DEFAULT '{}'::jsonb,
     attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    refinement_attempts integer NOT NULL DEFAULT 0 CHECK (refinement_attempts >= 0),
     max_attempts smallint NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 10),
     progress_percent smallint NOT NULL DEFAULT 0 CHECK (progress_percent BETWEEN 0 AND 100),
     next_attempt_at timestamptz,
@@ -252,8 +255,20 @@ CREATE TABLE transcription_jobs (
     error_message text,
     queued_at timestamptz NOT NULL DEFAULT now(),
     started_at timestamptz,
+    asr_result_checkpoint jsonb,
+    asr_completed_at timestamptz,
     completed_at timestamptz,
     updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT transcription_jobs_asr_checkpoint_check
+        CHECK (
+            asr_result_checkpoint IS NULL
+            OR jsonb_typeof(asr_result_checkpoint) = 'object'
+        ),
+    CONSTRAINT transcription_jobs_asr_checkpoint_time_check
+        CHECK (
+            (asr_result_checkpoint IS NULL AND asr_completed_at IS NULL)
+            OR (asr_result_checkpoint IS NOT NULL AND asr_completed_at IS NOT NULL)
+        ),
     CONSTRAINT transcription_jobs_source_provider_pair_mode_key
         UNIQUE (tenant_id, uploaded_file_id, provider_id, text_provider_id, speaker_mode)
 );
@@ -304,9 +319,9 @@ CREATE INDEX upload_batches_expiry_idx ON upload_batches(expires_at)
 CREATE INDEX uploaded_files_batch_status_idx ON uploaded_files(batch_id, status);
 CREATE INDEX transcription_jobs_claim_idx
     ON transcription_jobs(status, next_attempt_at, queued_at)
-    WHERE status = 'queued';
+    WHERE status IN ('queued', 'refining');
 CREATE INDEX transcription_jobs_stale_idx ON transcription_jobs(last_heartbeat_at)
-    WHERE status = 'processing';
+    WHERE status IN ('processing', 'refining');
 CREATE INDEX transcription_jobs_tenant_time_idx
     ON transcription_jobs(tenant_id, queued_at DESC);
 CREATE INDEX transcripts_source_idx ON transcripts(tenant_id, uploaded_file_id);

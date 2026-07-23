@@ -40,7 +40,10 @@ class TranscriptionJobResponse(BaseModel):
     speaker_mode: SpeakerMode
     progress_percent: int = Field(ge=0, le=100)
     attempts: int = Field(ge=0)
+    refinement_attempts: int = Field(ge=0)
     max_attempts: int = Field(ge=1)
+    has_asr_checkpoint: bool
+    asr_completed_at: datetime | None = None
     cancel_requested_at: datetime | None = None
     error_message: str | None = None
     queued_at: datetime

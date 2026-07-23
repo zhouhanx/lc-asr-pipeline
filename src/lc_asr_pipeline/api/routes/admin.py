@@ -319,6 +319,27 @@ async def update_admin_job_visibility(
     return AdminJobResponse.model_validate(job)
 
 
+@router.post("/jobs/{job_id}/retry", response_model=AdminJobResponse)
+async def retry_admin_job(
+    job_id: UUID,
+    _: CurrentPlatformAdmin,
+    database: DatabaseDependency,
+) -> AdminJobResponse:
+    async with database.connection() as connection:
+        current = await repository.get_job(connection, job_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Transcription job not found")
+        retried = await job_repository.retry(
+            connection,
+            tenant_id=UUID(str(current["tenant_id"])),
+            job_id=job_id,
+        )
+        job = await repository.get_job(connection, job_id) if retried is not None else None
+    if job is None:
+        raise HTTPException(status_code=409, detail="Job cannot be retried")
+    return AdminJobResponse.model_validate(job)
+
+
 @router.get("/jobs/{job_id}/export/{export_format}")
 async def export_admin_job(
     job_id: UUID,

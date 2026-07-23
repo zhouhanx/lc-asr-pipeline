@@ -10,6 +10,7 @@ import {
   Lock,
   LogOut,
   Power,
+  RotateCcw,
   ShieldCheck,
   Trash2,
   UserPlus,
@@ -263,6 +264,20 @@ export function AdminWorkspace({ auth, onLogout }: { auth: AdminAuth; onLogout: 
     }
   }
 
+  const retryJob = async (job: AdminJobDetail) => {
+    try {
+      await apiRequest(`/admin/jobs/${job.id}/retry`, {
+        method: 'POST',
+        token: auth.access_token,
+      })
+      setNotice(job.has_asr_checkpoint ? '已重新提交文本整理，语音解析结果将直接复用。' : '已重新提交语音解析。')
+      setSelectedJob(null)
+      await load()
+    } catch (reason) {
+      setError(reason instanceof ApiError ? reason.message : '任务重试失败。')
+    }
+  }
+
   const openRecordingTask = async (recording: AdminRecording) => {
     setRecordingSetup(recording)
     setRecordingModels([])
@@ -382,6 +397,7 @@ export function AdminWorkspace({ auth, onLogout }: { auth: AdminAuth; onLogout: 
                   onClose={() => setSelectedJob(null)}
                   onToggleVisibility={toggleJobVisibility}
                   onDownload={downloadJob}
+                  onRetry={retryJob}
                 />
               )}
               {activeView === 'recordings' && <Recordings recordings={recordings} onTranscribe={openRecordingTask} />}
@@ -575,6 +591,7 @@ function Tasks({
   onClose,
   onToggleVisibility,
   onDownload,
+  onRetry,
 }: {
   jobs: AdminJob[]
   selectedJob: AdminJobDetail | null
@@ -582,6 +599,7 @@ function Tasks({
   onClose: () => void
   onToggleVisibility: (job: AdminJobDetail) => void
   onDownload: (job: AdminJobDetail, format: 'txt' | 'json' | 'srt' | 'vtt' | 'html') => void
+  onRetry: (job: AdminJobDetail) => void
 }) {
   if (selectedJob) {
     return (
@@ -599,6 +617,8 @@ function Tasks({
               <div><p className="text-muted-foreground">语音模型</p><TaskModelName name={selectedJob.provider_name} deleted={selectedJob.provider_deleted} /></div>
               <div><p className="text-muted-foreground">文本模型</p><TaskModelName name={selectedJob.text_provider_name ?? '未配置'} deleted={selectedJob.text_provider_deleted} /></div>
             </div>
+            {selectedJob.has_asr_checkpoint && selectedJob.status !== 'completed' && <Alert status="success"><AlertTitle>语音解析结果已保存</AlertTitle><AlertDescription>文本模型失败时可以直接重试文本整理，不会重新调用语音模型。</AlertDescription></Alert>}
+            {selectedJob.status === 'failed' && <Button variant="outline" onClick={() => onRetry(selectedJob)}><RotateCcw />{selectedJob.has_asr_checkpoint ? '重试文本整理' : '重试语音解析'}</Button>}
             {selectedJob.status === 'completed' && <div className="flex flex-wrap gap-3">{(['txt', 'json', 'srt', 'vtt', 'html'] as const).map((format) => <Button key={format} variant="outline" onClick={() => onDownload(selectedJob, format)}><Download />{format.toUpperCase()}</Button>)}</div>}
             {selectedJob.transcript_text ? <DialogueTranscript transcript={selectedJob.transcript_text} /> : <div className="border-2 border-dashed border-border p-8 text-center text-muted-foreground">暂无转写内容</div>}
           </CardContent>

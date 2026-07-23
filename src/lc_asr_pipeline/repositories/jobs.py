@@ -221,10 +221,17 @@ class JobRepository:
             """
             UPDATE transcription_jobs
             SET cancel_requested_at = now(),
-                status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE status END,
-                completed_at = CASE WHEN status = 'queued' THEN now() ELSE completed_at END,
+                status = CASE
+                    WHEN status = 'queued'
+                      OR (status = 'refining' AND last_heartbeat_at IS NULL)
+                    THEN 'cancelled' ELSE status END,
+                completed_at = CASE
+                    WHEN status = 'queued'
+                      OR (status = 'refining' AND last_heartbeat_at IS NULL)
+                    THEN now() ELSE completed_at END,
                 updated_at = now()
-            WHERE id = %s AND tenant_id = %s AND status IN ('queued', 'processing')
+            WHERE id = %s AND tenant_id = %s
+              AND status IN ('queued', 'processing', 'refining')
             """,
             (job_id, tenant_id),
         )
@@ -241,11 +248,27 @@ class JobRepository:
             await connection.execute(
                 """
                 UPDATE transcription_jobs
-                SET status = 'queued', progress_percent = 0, next_attempt_at = now(),
+                SET status = CASE
+                        WHEN asr_result_checkpoint IS NOT NULL THEN 'refining'
+                        ELSE 'queued'
+                    END,
+                    progress_percent = CASE
+                        WHEN asr_result_checkpoint IS NOT NULL THEN 75 ELSE 0
+                    END,
+                    attempts = CASE
+                        WHEN asr_result_checkpoint IS NULL THEN 0 ELSE attempts
+                    END,
+                    refinement_attempts = CASE
+                        WHEN asr_result_checkpoint IS NOT NULL THEN 0
+                        ELSE refinement_attempts
+                    END,
+                    next_attempt_at = now(), last_heartbeat_at = NULL,
                     cancel_requested_at = NULL, error_code = NULL, error_message = NULL,
-                    started_at = NULL, completed_at = NULL, updated_at = now()
+                    started_at = CASE
+                        WHEN asr_result_checkpoint IS NULL THEN NULL ELSE started_at
+                    END,
+                    completed_at = NULL, updated_at = now()
                 WHERE id = %s AND tenant_id = %s AND status = 'failed'
-                  AND attempts < max_attempts
                 RETURNING id
                 """,
                 (job_id, tenant_id),
@@ -275,7 +298,7 @@ class JobRepository:
         ).fetchone()
         if row is None:
             return None
-        if row["status"] == "processing":
+        if row["status"] in {"processing", "refining"}:
             return {**dict(row), "blocked": True, "remaining_jobs": 1}
         await connection.execute(
             "DELETE FROM transcription_jobs WHERE id = %s AND tenant_id = %s",
@@ -349,7 +372,9 @@ class JobRepository:
                    f.relative_path AS source_path, j.status, j.visibility,
                    j.language, j.diarize,
                    j.speaker_mode,
-                   j.progress_percent, j.attempts, j.max_attempts,
+                   j.progress_percent, j.attempts, j.refinement_attempts,
+                   j.max_attempts, j.asr_completed_at,
+                   (j.asr_result_checkpoint IS NOT NULL) AS has_asr_checkpoint,
                    j.cancel_requested_at, j.error_message, j.queued_at,
                    j.started_at, j.completed_at, t.id AS transcript_id,
                    t.text AS transcript_text
@@ -374,7 +399,9 @@ class JobRepository:
                    j.text_model_name_snapshot AS text_model_name,
                    f.relative_path AS source_path, j.status, j.visibility,
                    j.language, j.diarize, j.speaker_mode,
-                   j.progress_percent, j.attempts, j.max_attempts,
+                   j.progress_percent, j.attempts, j.refinement_attempts,
+                   j.max_attempts, j.asr_completed_at,
+                   (j.asr_result_checkpoint IS NOT NULL) AS has_asr_checkpoint,
                    j.cancel_requested_at, j.error_message, j.queued_at,
                    j.started_at, j.completed_at, t.id AS transcript_id,
                    t.text AS transcript_text

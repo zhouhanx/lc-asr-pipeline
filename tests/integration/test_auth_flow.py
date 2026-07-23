@@ -4,14 +4,20 @@ import hashlib
 import io
 import shutil
 import zipfile
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 
 from lc_asr_pipeline.core.security import hash_password
 from lc_asr_pipeline.main import app
-from lc_asr_pipeline.worker import recover_stale_jobs
+from lc_asr_pipeline.schemas.transcription import TranscriptionResult
+from lc_asr_pipeline.worker import (
+    claim_job,
+    fail_job,
+    persist_asr_checkpoint,
+    recover_stale_jobs,
+)
 
 
 @pytest.mark.integration
@@ -432,6 +438,93 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 )
                 assert retried.status_code == 200, retried.text
                 assert retried.json()["status"] == "queued"
+                assert retried.json()["has_asr_checkpoint"] is False
+
+                asr_checkpoint = {
+                    "text": "语音模型已经解析完成",
+                    "language": "Chinese",
+                    "segments": [{
+                        "text": "语音模型已经解析完成",
+                        "start": 0,
+                        "end": 1.25,
+                        "speaker": None,
+                    }],
+                    "speaker_segments": [{
+                        "text": "语音模型已经解析完成",
+                        "start": 0,
+                        "end": 1.25,
+                        "speaker": "SPEAKER_00",
+                    }],
+                    "provider": "checkpoint-provider",
+                    "model": "checkpoint-model",
+                }
+                claimed_asr = await claim_job(database)
+                assert claimed_asr is not None
+                assert claimed_asr.id == UUID(job_id)
+                assert claimed_asr.stage == "asr"
+                checkpoint_attempt = await persist_asr_checkpoint(
+                    database,
+                    claimed_asr,
+                    TranscriptionResult.model_validate(asr_checkpoint),
+                )
+                assert checkpoint_attempt == 1
+                async with database.connection() as connection:
+                    await connection.execute(
+                        """
+                        UPDATE transcription_jobs
+                        SET status = 'failed', refinement_attempts = 3,
+                            progress_percent = 75, last_heartbeat_at = NULL,
+                            next_attempt_at = NULL
+                        WHERE id = %s
+                        """,
+                        (job_id,),
+                    )
+                refinement_retry = await client.post(
+                    f"/api/v1/jobs/{job_id}/retry",
+                    headers={"Authorization": f"Bearer {auth['access_token']}"},
+                )
+                assert refinement_retry.status_code == 200, refinement_retry.text
+                assert refinement_retry.json()["status"] == "refining"
+                assert refinement_retry.json()["progress_percent"] == 75
+                assert refinement_retry.json()["has_asr_checkpoint"] is True
+                assert refinement_retry.json()["refinement_attempts"] == 0
+
+                claimed_refinement = await claim_job(database)
+                assert claimed_refinement is not None
+                assert claimed_refinement.id == UUID(job_id)
+                assert claimed_refinement.stage == "refinement"
+                assert claimed_refinement.refinement_attempt == 1
+                assert claimed_refinement.asr_result_checkpoint == asr_checkpoint
+                await fail_job(
+                    database,
+                    claimed_refinement,
+                    httpx.TransportError("simulated text-provider transport failure"),
+                )
+                retained_after_failure = await client.get(
+                    f"/api/v1/jobs/{job_id}",
+                    headers={"Authorization": f"Bearer {auth['access_token']}"},
+                )
+                assert retained_after_failure.status_code == 200
+                assert retained_after_failure.json()["status"] == "refining"
+                assert retained_after_failure.json()["progress_percent"] == 75
+                assert retained_after_failure.json()["has_asr_checkpoint"] is True
+                assert "refinement retry scheduled" in (
+                    retained_after_failure.json()["error_message"]
+                )
+                async with database.connection() as connection:
+                    await connection.execute(
+                        """
+                        UPDATE transcription_jobs SET next_attempt_at = now()
+                        WHERE id = %s
+                        """,
+                        (job_id,),
+                    )
+                claimed_refinement_retry = await claim_job(database)
+                assert claimed_refinement_retry is not None
+                assert claimed_refinement_retry.id == UUID(job_id)
+                assert claimed_refinement_retry.stage == "refinement"
+                assert claimed_refinement_retry.refinement_attempt == 2
+                assert claimed_refinement_retry.asr_result_checkpoint == asr_checkpoint
 
                 async with database.connection() as connection:
                     transcript = await (
@@ -464,7 +557,8 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     await connection.execute(
                         """
                         UPDATE transcription_jobs
-                        SET status = 'completed', progress_percent = 100, completed_at = now()
+                        SET status = 'completed', progress_percent = 100,
+                            completed_at = now(), last_heartbeat_at = NULL
                         WHERE id = %s
                         """,
                         (job_id,),

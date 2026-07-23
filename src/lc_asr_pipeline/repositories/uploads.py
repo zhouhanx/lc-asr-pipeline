@@ -256,7 +256,8 @@ class UploadRepository:
                   AND NOT EXISTS (
                       SELECT 1 FROM transcription_jobs j
                       JOIN uploaded_files f ON f.id = j.uploaded_file_id
-                      WHERE f.batch_id = b.id AND j.status IN ('queued', 'processing', 'completed')
+                      WHERE f.batch_id = b.id
+                        AND j.status IN ('queued', 'processing', 'refining', 'completed')
                   )
                 FOR UPDATE
                 """,
@@ -310,7 +311,9 @@ class UploadRepository:
             await connection.execute(
                 """
                 SELECT count(*) AS count,
-                       count(*) FILTER (WHERE status = 'processing') AS processing
+                       count(*) FILTER (
+                           WHERE status IN ('processing', 'refining')
+                       ) AS processing
                 FROM transcription_jobs
                 WHERE tenant_id = %s AND uploaded_file_id = %s
                 """,

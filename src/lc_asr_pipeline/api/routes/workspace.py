@@ -26,7 +26,9 @@ async def workspace_summary(
             await connection.execute(
                 """
                 SELECT
-                    count(*) FILTER (WHERE status = 'processing') AS running_tasks,
+                    count(*) FILTER (
+                        WHERE status IN ('processing', 'refining')
+                    ) AS running_tasks,
                     count(*) FILTER (WHERE status = 'queued') AS queued_tasks,
                     count(*) FILTER (WHERE status = 'completed') AS completed_tasks,
                     (SELECT count(*) FROM model_providers

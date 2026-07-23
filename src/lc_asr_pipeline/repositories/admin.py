@@ -310,7 +310,7 @@ class AdminRepository:
                 """
                 SELECT count(*) AS count
                 FROM transcription_jobs
-                WHERE tenant_id = %s AND status = 'processing'
+                WHERE tenant_id = %s AND status IN ('processing', 'refining')
                 """,
                 (tenant_id,),
             )
@@ -544,7 +544,9 @@ class AdminRepository:
                    j.text_model_name_snapshot AS text_model_name,
                    f.relative_path AS source_path, j.status, j.visibility,
                    j.language, j.diarize,
-                   j.speaker_mode, j.progress_percent, j.attempts, j.max_attempts,
+                   j.speaker_mode, j.progress_percent, j.attempts,
+                   j.refinement_attempts, j.max_attempts, j.asr_completed_at,
+                   (j.asr_result_checkpoint IS NOT NULL) AS has_asr_checkpoint,
                    j.cancel_requested_at, j.error_message, j.queued_at,
                    j.started_at, j.completed_at, t.id AS transcript_id,
                    t.text AS transcript_text
