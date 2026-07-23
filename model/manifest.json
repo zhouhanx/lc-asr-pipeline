@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-07-22",
+  "runtime": {
+    "kind": "native_macos",
+    "environment": "lc-asr-model",
+    "python": "3.12",
+    "mlx_qwen3_asr": "0.3.5",
+    "pyannote_audio": "4.0.7"
+  },
+  "artifacts": [
+    {
+      "id": "qwen3-asr-1.7b-source",
+      "source": "Qwen/Qwen3-ASR-1.7B",
+      "local_directory": "downloads/qwen3-asr-1.7b",
+      "license": "Apache-2.0",
+      "gated": false,
+      "purpose": "source weights for native MLX conversion"
+    },
+    {
+      "id": "qwen3-asr-1.7b-8bit",
+      "source": "qwen3-asr-1.7b-source",
+      "local_directory": "qwen3-asr-1.7b-8bit",
+      "quantization_bits": 8,
+      "group_size": 64,
+      "license": "Apache-2.0",
+      "gated": false,
+      "purpose": "primary local transcription model"
+    },
+    {
+      "id": "qwen3-forced-aligner-0.6b",
+      "source": "Qwen/Qwen3-ForcedAligner-0.6B",
+      "local_directory": "qwen3-forced-aligner-0.6b",
+      "license": "Apache-2.0",
+      "gated": false,
+      "purpose": "word-level timestamps"
+    },
+    {
+      "id": "pyannote-community-1",
+      "source": "pyannote/speaker-diarization-community-1",
+      "local_directory": "pyannote-community-1",
+      "license": "CC-BY-4.0",
+      "gated": true,
+      "purpose": "offline two-speaker diarization"
+    }
+  ]
+}

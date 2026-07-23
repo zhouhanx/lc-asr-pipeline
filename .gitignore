@@ -1,0 +1,149 @@
+# ---------------------------------------------------------------------------
+# Secrets and local configuration
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+.npmrc
+.pypirc
+.netrc
+credentials*.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# Agent-local knowledge and instructions
+/llm-repo/
+/AGENTS.md
+
+# ---------------------------------------------------------------------------
+# Python environments, caches, coverage, and build output
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+.conda/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.egg-info/
+.eggs/
+dist/
+build/
+wheelhouse/
+
+# ---------------------------------------------------------------------------
+# Frontend dependencies, caches, builds, and browser-test output
+# ---------------------------------------------------------------------------
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/
+/frontend/coverage/
+/frontend/playwright-report/
+/frontend/test-results/
+/frontend/blob-report/
+/frontend/screenshots/
+/frontend/downloads/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Runtime logs, process state, and temporary files
+# ---------------------------------------------------------------------------
+*.log
+*.log.*
+*.pid
+*.pid.lock
+/log/*
+!/log/.gitkeep
+/logs/*
+!/logs/.gitkeep
+tmp/
+temp/
+.cache/
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# Runtime databases, recordings, transcripts, and generated exports
+# Keep the repository-owned directory itself through .gitkeep.
+# ---------------------------------------------------------------------------
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+/data/*
+!/data/.gitkeep
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.opus
+*.mp4
+*.mov
+*.webm
+*.srt
+*.vtt
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+
+# ---------------------------------------------------------------------------
+# Local model weights and ML datasets
+# Keep only the directory placeholder and its public manifest/documentation.
+# ---------------------------------------------------------------------------
+/model/*
+!/model/.gitkeep
+!/model/README.md
+!/model/manifest.json
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.gguf
+*.bin
+*.npy
+*.npz
+*.parquet
+*.arrow
+
+# ---------------------------------------------------------------------------
+# Editors and operating-system metadata
+# ---------------------------------------------------------------------------
+/.idea/
+/.vscode/
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
