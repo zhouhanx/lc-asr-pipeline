@@ -55,9 +55,7 @@ class DeepSeekTranscriptRefiner:
     def invoke(self, request: TranscriptRefinementRequest) -> TranscriptRefinementResult:
         return asyncio.run(self.ainvoke(request))
 
-    async def ainvoke(
-        self, request: TranscriptRefinementRequest
-    ) -> TranscriptRefinementResult:
+    async def ainvoke(self, request: TranscriptRefinementRequest) -> TranscriptRefinementResult:
         hint_text = "\n".join(
             f"{segment.speaker or 'UNKNOWN'}: {segment.text}"
             for segment in request.speaker_hints
@@ -67,8 +65,8 @@ class DeepSeekTranscriptRefiner:
             "你是中文语音转写校对员。必须完整保留原意和信息顺序，不得总结、删减或补充事实。"
             "根据指定人数恢复说话人轮次；结合上下文修正明确的同音错字、关键词、产品名、"
             "公司名、英文缩写和专业术语。无法确定时保留原文。"
-            "只输出 JSON，格式为 {\"utterances\":[{\"speaker\":\"用户1\","
-            "\"text\":\"完整话语\"}]}。speaker 只能使用用户加正整数。"
+            '只输出 JSON，格式为 {"utterances":[{"speaker":"用户1",'
+            '"text":"完整话语"}]}。speaker 只能使用用户加正整数。'
         )
         user_prompt = (
             f"人数模式：{request.speaker_mode}\n"
@@ -111,11 +109,7 @@ class DeepSeekTranscriptRefiner:
             raise DeepSeekRefinementError("DeepSeek returned invalid structured output") from exc
 
         allowed_max = (
-            1
-            if request.speaker_mode == "single"
-            else 2
-            if request.speaker_mode == "double"
-            else 99
+            1 if request.speaker_mode == "single" else 2 if request.speaker_mode == "double" else 99
         )
         normalized: list[RefinedUtterance] = []
         for utterance in parsed.utterances:
@@ -127,9 +121,7 @@ class DeepSeekTranscriptRefiner:
             normalized.append(
                 RefinedUtterance(speaker=utterance.speaker, text=utterance.text.strip())
             )
-        formatted = "\n".join(
-            f"{utterance.speaker}：{utterance.text}" for utterance in normalized
-        )
+        formatted = "\n".join(f"{utterance.speaker}：{utterance.text}" for utterance in normalized)
         return TranscriptRefinementResult(
             formatted_text=formatted,
             utterances=normalized,

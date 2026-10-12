@@ -6,7 +6,11 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from lc_asr_pipeline.api.dependencies import DatabaseDependency, SettingsDependency
 from lc_asr_pipeline.api.security import CurrentAccount, InitialPasswordAccount
-from lc_asr_pipeline.core.security import PasswordPolicyError
+from lc_asr_pipeline.core.security import (
+    PasswordPolicyError,
+    create_csrf_token,
+    verify_csrf_token,
+)
 from lc_asr_pipeline.repositories.identity import Account
 from lc_asr_pipeline.schemas.auth import (
     AuthResponse,
@@ -47,6 +51,37 @@ def _set_refresh_cookie(
         samesite="lax",
         path=f"{settings.api_prefix}/auth",
     )
+    response.set_cookie(
+        key=settings.auth_csrf_cookie_name,
+        value=create_csrf_token(result.refresh_token, settings),
+        max_age=settings.auth_refresh_token_days * 24 * 60 * 60,
+        httponly=False,
+        secure=settings.app_env != "development",
+        samesite="lax",
+        path="/",
+    )
+
+
+def _delete_auth_cookies(response: Response, settings: SettingsDependency) -> None:
+    response.delete_cookie(
+        settings.auth_refresh_cookie_name,
+        path=f"{settings.api_prefix}/auth",
+    )
+    response.delete_cookie(settings.auth_csrf_cookie_name, path="/")
+
+
+def _require_csrf(
+    request: Request,
+    *,
+    refresh_token: str,
+    settings: SettingsDependency,
+) -> None:
+    origin = request.headers.get("origin")
+    if origin is not None and origin not in settings.cors_origin_list:
+        raise HTTPException(status_code=403, detail="CSRF origin rejected")
+    submitted = request.headers.get("x-csrf-token", "")
+    if not submitted or not verify_csrf_token(refresh_token, submitted, settings):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
 
 
 def _auth_response(result: AuthResult) -> AuthResponse:
@@ -121,10 +156,7 @@ async def change_initial_password(
         raise HTTPException(status_code=422, detail=str(error)) from error
     if not changed:
         raise HTTPException(status_code=409, detail="Initial password was already changed")
-    response.delete_cookie(
-        settings.auth_refresh_cookie_name,
-        path=f"{settings.api_prefix}/auth",
-    )
+    _delete_auth_cookies(response, settings)
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
@@ -148,10 +180,7 @@ async def change_password(
         raise HTTPException(status_code=422, detail=str(error)) from error
     if not changed:
         raise HTTPException(status_code=409, detail="Password could not be changed")
-    response.delete_cookie(
-        settings.auth_refresh_cookie_name,
-        path=f"{settings.api_prefix}/auth",
-    )
+    _delete_auth_cookies(response, settings)
 
 
 @router.post("/refresh", response_model=AuthResponse)
@@ -167,6 +196,7 @@ async def refresh(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token"
         )
+    _require_csrf(request, refresh_token=refresh_token, settings=settings)
     user_agent, ip_address = _request_context(request)
     try:
         result = await AuthService(database, settings).refresh(
@@ -175,10 +205,7 @@ async def refresh(
             ip_address=ip_address,
         )
     except InvalidRefreshTokenError as error:
-        response.delete_cookie(
-            settings.auth_refresh_cookie_name,
-            path=f"{settings.api_prefix}/auth",
-        )
+        _delete_auth_cookies(response, settings)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid refresh token",
@@ -197,11 +224,9 @@ async def logout(
     """Revoke the current refresh session and clear its cookie."""
     refresh_token = request.cookies.get(settings.auth_refresh_cookie_name)
     if refresh_token:
+        _require_csrf(request, refresh_token=refresh_token, settings=settings)
         await AuthService(database, settings).logout(refresh_token)
-    response.delete_cookie(
-        settings.auth_refresh_cookie_name,
-        path=f"{settings.api_prefix}/auth",
-    )
+    _delete_auth_cookies(response, settings)
     return MessageResponse(message="Logged out")
 
 

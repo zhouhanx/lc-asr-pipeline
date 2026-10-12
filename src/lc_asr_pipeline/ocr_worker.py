@@ -72,7 +72,7 @@ class ClaimedOCRJob:
 
 
 async def recover_stale_ocr_jobs(database: Database) -> None:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         recovered = await connection.execute(
             """
             UPDATE ocr_jobs
@@ -107,7 +107,7 @@ async def recover_stale_ocr_jobs(database: Database) -> None:
 
 
 async def claim_ocr_job(database: Database) -> ClaimedOCRJob | None:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         row = await (
             await connection.execute(
                 """
@@ -207,7 +207,7 @@ async def claim_ocr_job(database: Database) -> ClaimedOCRJob | None:
 async def _heartbeat_until_cancel(database: Database, job: ClaimedOCRJob) -> None:
     while True:
         await asyncio.sleep(5)
-        async with database.connection() as connection:
+        async with database.system_connection() as connection:
             row = await (
                 await connection.execute(
                     """
@@ -224,7 +224,7 @@ async def _heartbeat_until_cancel(database: Database, job: ClaimedOCRJob) -> Non
 
 
 async def _mark_cancelled(database: Database, job: ClaimedOCRJob) -> None:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         changed = await connection.execute(
             """
             UPDATE ocr_jobs
@@ -257,7 +257,7 @@ async def _run_ocr_stage(
 ) -> PaddleOCRResult:
     async def progress(extracted: int, total: int) -> None:
         percent = 5 + round((extracted / total) * 65)
-        async with database.connection() as connection:
+        async with database.system_connection() as connection:
             await connection.execute(
                 """
                 UPDATE ocr_jobs
@@ -278,7 +278,7 @@ async def _run_ocr_stage(
         Path(job.storage_path),
         progress_callback=progress,
     )
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         changed = await connection.execute(
             """
             UPDATE ocr_jobs
@@ -410,7 +410,7 @@ async def _persist_result(
     markdown_text: str,
     project_extraction: ResumeProjectExtraction | None,
 ) -> None:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         state = await (
             await connection.execute(
                 """
@@ -525,7 +525,7 @@ async def _fail_job(database: Database, job: ClaimedOCRJob, error: Exception) ->
     stage_attempt = job.refinement_attempt if job.stage == "refinement" else job.attempt
     retry = _retryable(error) and stage_attempt < job.max_attempts
     delay_seconds = min(60, 2 ** max(0, stage_attempt - 1))
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         changed = await connection.execute(
             """
             UPDATE ocr_jobs

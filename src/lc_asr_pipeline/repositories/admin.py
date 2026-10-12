@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from typing import Any, cast
 from uuid import UUID
 
 from psycopg import AsyncConnection
@@ -15,6 +16,7 @@ class PlatformAdmin:
     username: str
     password_hash: str
     must_change_password: bool
+    locked_until: datetime | None
 
 
 class AdminRepository:
@@ -26,7 +28,7 @@ class AdminRepository:
         row = await (
             await connection.execute(
                 """
-                SELECT id, username, password_hash, must_change_password
+                SELECT id, username, password_hash, must_change_password, locked_until
                 FROM platform_admins
                 WHERE username = %s AND status = 'active'
                 """,
@@ -43,7 +45,7 @@ class AdminRepository:
         row = await (
             await connection.execute(
                 """
-                SELECT id, username, password_hash, must_change_password
+                SELECT id, username, password_hash, must_change_password, locked_until
                 FROM platform_admins
                 WHERE id = %s AND status = 'active'
                 """,
@@ -52,15 +54,191 @@ class AdminRepository:
         ).fetchone()
         return None if row is None else PlatformAdmin(**row)  # type: ignore[arg-type]
 
-    async def record_login(
+    async def consume_login_limit(
+        self,
+        connection: AsyncConnection[dict[str, object]],
+        *,
+        scope: str,
+        key_hash: str,
+        max_attempts: int,
+        window_seconds: int,
+        block_seconds: int,
+    ) -> int | None:
+        await connection.execute(
+            """
+            INSERT INTO platform_admin_login_limits (scope, key_hash, attempts)
+            VALUES (%s, %s, 0)
+            ON CONFLICT (scope, key_hash) DO NOTHING
+            """,
+            (scope, key_hash),
+        )
+        row = await (
+            await connection.execute(
+                """
+                SELECT window_started_at, attempts, blocked_until, now() AS database_now
+                FROM platform_admin_login_limits
+                WHERE scope = %s AND key_hash = %s
+                FOR UPDATE
+                """,
+                (scope, key_hash),
+            )
+        ).fetchone()
+        assert row is not None
+        now = cast(datetime, row["database_now"])
+        blocked_until = cast(datetime | None, row["blocked_until"])
+        if blocked_until is not None and blocked_until > now:
+            return max(1, int((blocked_until - now).total_seconds()))
+        window_expired = (
+            now - cast(datetime, row["window_started_at"])
+        ).total_seconds() >= window_seconds
+        attempts = 1 if window_expired else cast(int, row["attempts"]) + 1
+        if attempts > max_attempts:
+            updated = await (
+                await connection.execute(
+                    """
+                    UPDATE platform_admin_login_limits
+                    SET attempts = %s,
+                        window_started_at = CASE WHEN %s THEN now()
+                                                 ELSE window_started_at END,
+                        blocked_until = now() + make_interval(secs => %s),
+                        updated_at = now()
+                    WHERE scope = %s AND key_hash = %s
+                    RETURNING blocked_until, now() AS database_now
+                    """,
+                    (attempts, window_expired, block_seconds, scope, key_hash),
+                )
+            ).fetchone()
+            assert updated is not None
+            updated_until = cast(datetime, updated["blocked_until"])
+            updated_now = cast(datetime, updated["database_now"])
+            return max(
+                1,
+                int((updated_until - updated_now).total_seconds()),
+            )
+        await connection.execute(
+            """
+            UPDATE platform_admin_login_limits
+            SET attempts = %s,
+                window_started_at = CASE WHEN %s THEN now() ELSE window_started_at END,
+                blocked_until = NULL,
+                updated_at = now()
+            WHERE scope = %s AND key_hash = %s
+            """,
+            (attempts, window_expired, scope, key_hash),
+        )
+        return None
+
+    async def record_failed_login(
+        self,
+        connection: AsyncConnection[dict[str, object]],
+        *,
+        admin_id: UUID,
+        max_failures: int,
+        window_seconds: int,
+        lock_seconds: int,
+    ) -> int | None:
+        row = await (
+            await connection.execute(
+                """
+                SELECT failed_login_attempts, failed_login_window_started_at,
+                       locked_until, now() AS database_now
+                FROM platform_admins
+                WHERE id = %s AND status = 'active'
+                FOR UPDATE
+                """,
+                (admin_id,),
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        now = cast(datetime, row["database_now"])
+        locked_until = cast(datetime | None, row["locked_until"])
+        if locked_until is not None and locked_until > now:
+            return max(1, int((locked_until - now).total_seconds()))
+        window_started = cast(datetime | None, row["failed_login_window_started_at"])
+        window_expired = (
+            window_started is None or (now - window_started).total_seconds() >= window_seconds
+        )
+        attempts = 1 if window_expired else cast(int, row["failed_login_attempts"]) + 1
+        locked = attempts >= max_failures
+        updated = await (
+            await connection.execute(
+                """
+                UPDATE platform_admins
+                SET failed_login_attempts = %s,
+                    failed_login_window_started_at =
+                        CASE WHEN %s THEN now() ELSE failed_login_window_started_at END,
+                    last_failed_login_at = now(),
+                    locked_until =
+                        CASE WHEN %s THEN now() + make_interval(secs => %s) ELSE NULL END,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING locked_until, now() AS database_now
+                """,
+                (attempts, window_expired, locked, lock_seconds, admin_id),
+            )
+        ).fetchone()
+        assert updated is not None
+        updated_until = cast(datetime | None, updated["locked_until"])
+        if updated_until is None:
+            return None
+        updated_now = cast(datetime, updated["database_now"])
+        return max(
+            1,
+            int((updated_until - updated_now).total_seconds()),
+        )
+
+    async def clear_login_limit(
+        self,
+        connection: AsyncConnection[dict[str, object]],
+        *,
+        scope: str,
+        key_hash: str,
+    ) -> None:
+        await connection.execute(
+            """
+            DELETE FROM platform_admin_login_limits
+            WHERE scope = %s AND key_hash = %s
+            """,
+            (scope, key_hash),
+        )
+
+    async def record_successful_login(
         self,
         connection: AsyncConnection[dict[str, object]],
         admin_id: UUID,
-    ) -> None:
+    ) -> int | None:
+        row = await (
+            await connection.execute(
+                """
+                SELECT locked_until, now() AS database_now
+                FROM platform_admins
+                WHERE id = %s AND status = 'active'
+                FOR UPDATE
+                """,
+                (admin_id,),
+            )
+        ).fetchone()
+        if row is None:
+            return 1
+        locked_until = cast(datetime | None, row["locked_until"])
+        database_now = cast(datetime, row["database_now"])
+        if locked_until is not None and locked_until > database_now:
+            return max(
+                1,
+                int((locked_until - database_now).total_seconds()),
+            )
         await connection.execute(
-            "UPDATE platform_admins SET last_login_at = now() WHERE id = %s",
+            """
+            UPDATE platform_admins
+            SET last_login_at = now(), failed_login_attempts = 0,
+                failed_login_window_started_at = NULL, locked_until = NULL,
+                updated_at = now()
+            WHERE id = %s
+            """,
             (admin_id,),
         )
+        return None
 
     async def change_password(
         self,
@@ -180,8 +358,11 @@ class AdminRepository:
         ).fetchone()
         assert role_row is not None
         await connection.execute(
-            "INSERT INTO membership_roles (membership_id, role_id) VALUES (%s, %s)",
-            (membership["id"], role_row["id"]),
+            """
+            INSERT INTO membership_roles (tenant_id, membership_id, role_id)
+            VALUES (%s, %s, %s)
+            """,
+            (tenant_id, membership["id"], role_row["id"]),
         )
         return {
             **dict(user),

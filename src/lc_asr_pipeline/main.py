@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from lc_asr_pipeline.api.middleware import OperationIdMiddleware, SecurityHeadersMiddleware
 from lc_asr_pipeline.api.router import api_router
 from lc_asr_pipeline.core.config import Settings, get_settings
 from lc_asr_pipeline.db.pool import Database
@@ -32,6 +33,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         debug=app_settings.app_debug,
         lifespan=lifespan,
     )
+    app.add_middleware(OperationIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, settings=app_settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=app_settings.cors_origin_list,
@@ -43,7 +46,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "X-CSRF-Token",
             "X-Chunk-SHA256",
         ],
+        expose_headers=["X-Operation-ID"],
     )
+
     app.include_router(api_router, prefix=app_settings.api_prefix)
     return app
 

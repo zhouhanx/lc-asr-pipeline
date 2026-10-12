@@ -294,7 +294,10 @@ class UploadRepository:
         if batch is None:
             return None
         cursor = await connection.execute(
-            "SELECT id FROM uploaded_files WHERE batch_id = %s",
+            """
+            SELECT id FROM uploaded_files
+            WHERE batch_id = %s AND parent_file_id IS NULL
+            """,
             (batch_id,),
         )
         file_ids = [cast(UUID, row["id"]) for row in await cursor.fetchall()]
@@ -312,6 +315,14 @@ class UploadRepository:
             """,
             (batch_id,),
         )
+        for file_id in file_ids:
+            await self.enqueue_storage_deletion(
+                connection,
+                tenant_id=tenant_id,
+                root_file_id=file_id,
+                exact_storage_path=None,
+                reason="batch_cancel",
+            )
         return file_ids
 
     async def delete_file_for_tenant(
@@ -320,6 +331,7 @@ class UploadRepository:
         *,
         tenant_id: UUID,
         file_id: UUID,
+        deletion_reason: str,
     ) -> dict[str, Any] | None:
         item = await (
             await connection.execute(
@@ -362,10 +374,7 @@ class UploadRepository:
             )
         ).fetchone()
         assert ocr_jobs is not None
-        if (
-            int(str(jobs["processing"])) > 0
-            or int(str(ocr_jobs["processing"])) > 0
-        ):
+        if int(str(jobs["processing"])) > 0 or int(str(ocr_jobs["processing"])) > 0:
             return {**dict(item), "blocked": True}
 
         deleted_files = 1
@@ -433,6 +442,13 @@ class UploadRepository:
                 """,
                 (batch_id, tenant_id),
             )
+        deletion_id = await self.enqueue_storage_deletion(
+            connection,
+            tenant_id=tenant_id,
+            root_file_id=root_file_id,
+            exact_storage_path=exact_storage_path,
+            reason=deletion_reason,
+        )
         return {
             "id": file_id,
             "blocked": False,
@@ -440,4 +456,29 @@ class UploadRepository:
             "deleted_files": deleted_files,
             "root_file_id": root_file_id,
             "exact_storage_path": exact_storage_path,
+            "deletion_id": deletion_id,
         }
+
+    async def enqueue_storage_deletion(
+        self,
+        connection: AsyncConnection[dict[str, object]],
+        *,
+        tenant_id: UUID,
+        root_file_id: UUID | None,
+        exact_storage_path: str | None,
+        reason: str,
+    ) -> int:
+        row = await (
+            await connection.execute(
+                """
+                INSERT INTO storage_deletion_queue (
+                    tenant_id, root_file_id, exact_storage_path, reason
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+                """,
+                (tenant_id, root_file_id, exact_storage_path, reason),
+            )
+        ).fetchone()
+        assert row is not None
+        return cast(int, row["id"])

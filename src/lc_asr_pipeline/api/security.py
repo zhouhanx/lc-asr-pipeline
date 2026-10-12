@@ -55,7 +55,7 @@ async def get_current_account(
     except InvalidAccessTokenError as error:
         raise authentication_error from error
 
-    async with database.connection() as connection:
+    async with database.tenant_connection(claims.tenant_id) as connection:
         account = await IdentityRepository().find_active_account(
             connection,
             user_id=claims.user_id,
@@ -95,7 +95,7 @@ async def get_initial_password_account(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired access token",
         ) from error
-    async with database.connection() as connection:
+    async with database.tenant_connection(claims.tenant_id) as connection:
         account = await IdentityRepository().find_active_account(
             connection,
             user_id=claims.user_id,

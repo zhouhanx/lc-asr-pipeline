@@ -8,14 +8,17 @@
 
 - 超级管理员登录、强制首次改密、组织及账户创建、禁用、删除和密码重置。
 - 新账户使用随机初始密码，首次登录后必须修改密码并重新登录。
-- 租户级数据隔离，以及公开/私有转写任务。
+- PostgreSQL 17 强制 RLS 与应用层双重租户隔离，以及公开/私有转写任务。
+- 管理员持久化登录限流和临时账户锁定、Refresh/Logout CSRF 防护及统一安全响应头。
 - 语音、文本和 OCR 模型配置、加密保存凭据、连接测试及模型发现。
 - 模型软删除：历史任务仍可显示，已删除模型以删除线和状态提示标识。
 - 本地 MLX Qwen3-ASR、StepFun 及 OpenAI 兼容语音接口。
 - DeepSeek 及 OpenAI 兼容文本整理接口。
 - PaddleOCR-VL-1.6 官方异步 API，支持批量 PDF/图片解析、Markdown 结果查看与导出。
 - 简历 OCR 项目知识链：自动抽取候选人下的多个项目，保留公司、角色、起止时间、背景、职责、成果、技术栈及原始 OCR 来源；支持独立详情复制和带证据理由的三维项目评分。
+- 简历撰写仅提供 `data/resume_template/` 对应的 5 套本地模板、主题色和实时 A4 预览；05 按 Word/PDF 参考重点实现内容驱动分页。可从本组织全部候选人的数据简历项目单条或批量填充，技术栈使用横向标签编辑与展示，并支持安全 HTML/PDF 导出。
 - 分片、断点续传和批量上传，单批次上限为 5 GiB。
+- 独立上传保留调度器、持久化物理删除重试队列和受边界保护的孤儿文件清理。
 - ZIP/TAR 安全解包、SHA-256 去重、任务重试/取消/重新转写。
 - 时间戳、说话人分离、左右对话布局和关键词/专业术语整理。
 - TXT、JSON、SRT、VTT、HTML 导出。
@@ -23,6 +26,7 @@
 - PostgreSQL Worker 任务抢占、心跳、异常恢复和模型配置快照。
 - 两阶段持久化：ASR 完成后立即保存原始文本、时间戳和说话人提示；文本整理失败时只重试文本模型。
 - 全链路任务关联 ID：转写使用 `ASR-<UUID>`，OCR 使用 `OCR-<UUID>`；任务页面、失败提示、管理员视图和 Worker 生命周期日志使用同一编号。
+- 全平台操作关联 ID：每次 API 请求由服务端生成唯一 `OP-<UUID>`，通过 `X-Operation-ID` 响应头和安全日志贯通；前端 API 错误会显示该编号，便于按一次具体操作排查。
 
 ## 系统结构
 
@@ -54,6 +58,7 @@ flowchart LR
 ## 环境要求
 
 - macOS Apple Silicon：仅在使用本地 MLX/Metal 推理时需要。
+- 桌面版 Google Chrome 或 Microsoft Edge。其他浏览器和其他 Chromium 派生浏览器不在支持范围内。
 - Conda。
 - Python 3.10（已验证版本为 3.10.20）。
 - PostgreSQL 17。
@@ -118,7 +123,7 @@ python -m lc_asr_pipeline.db.migrate
 ./dev.sh status
 ```
 
-`dev.sh` 会启动 FastAPI、Worker 和 Vite，但不会启动本地模型服务。
+`dev.sh` 会启动 FastAPI、Worker、上传保留调度器和 Vite，但不会启动本地模型服务。
 
 打开：
 
@@ -134,13 +139,20 @@ python -m lc_asr_pipeline.db.migrate
 ./dev.sh stop
 ```
 
-日志写入 `logs/backend.log`、`logs/worker.log`、`logs/frontend.log` 和 `logs/dev.log`。
+日志写入 `logs/backend.log`、`logs/worker.log`、`logs/retention.log`、`logs/frontend.log`
+和 `logs/dev.log`。
 
 任务失败时，复制页面中的完整“任务 ID”，在 Worker 日志中精确检索：
 
 ```sh
 rg 'task_id=ASR-00000000-0000-0000-0000-000000000000' logs/worker.log
 rg 'task_id=OCR-00000000-0000-0000-0000-000000000000' logs/worker.log
+```
+
+普通页面操作或 API 错误使用“操作 ID”检索 FastAPI 日志：
+
+```sh
+rg 'operation_id=OP-00000000-0000-0000-0000-000000000000' logs/backend.log
 ```
 
 日志事件包括任务创建、领取、阶段完成、自动重试、最终失败、取消、完成和过期 Worker 恢复。错误日志保留异常类型和代码栈位置，但不会写入供应商原始异常正文、请求载荷或密钥。
@@ -284,6 +296,8 @@ python -m pip check
 
 # 前端检查
 cd frontend
+npm test
+npm run test:coverage
 npm run lint
 npm run build
 
@@ -296,9 +310,18 @@ lc-asr-cleanup
 
 # 确认后实际清理
 lc-asr-cleanup --apply
+
+# 单次执行保留、删除重试和孤儿扫描
+lc-asr-retention-worker --once
+
+# 精确验证 5 GiB 稀疏文件与分块边界（不会写入 5 GiB 物理数据）
+python scripts/upload_boundary_pressure.py
 ```
 
-也可以使用安装后提供的 `lc-asr-migrate` 和 `lc-asr-worker` 命令。浏览器回归测试需要额外的测试管理员凭据、测试音频和云端 Provider 配置，具体以 [frontend/package.json](frontend/package.json) 及 `scripts/` 下的测试脚本为准，切勿把这些凭据写入测试代码。
+也可以使用安装后提供的 `lc-asr-migrate` 和 `lc-asr-worker` 命令。前端烟测分别使用
+`npm run test:browser:chrome` 与 `npm run test:browser:edge`；完整浏览器回归需要额外的测试管理员
+凭据、测试音频和云端 Provider 配置，具体以
+[frontend/package.json](frontend/package.json) 及 `scripts/` 下的测试脚本为准，切勿把这些凭据写入测试代码。
 
 ## 目录说明
 
@@ -319,10 +342,16 @@ lc-asr-cleanup --apply
 
 ## 数据与安全边界
 
-- 用户数据查询必须带租户边界；只有超级管理员路由可跨租户查看。
+- 租户业务表启用并强制 PostgreSQL RLS。租户请求在事务内设置运行角色与
+  `app.tenant_id`；没有租户上下文时默认拒绝，只有显式 system connection 可跨租户。
 - 模型 Provider 密钥使用由应用根密钥派生的 AES-GCM 密钥加密保存，不在 API 响应或日志中返回明文。
-- Access Token 为短期令牌，Refresh Token 使用 HttpOnly Cookie 并支持轮换。
-- 上传文件按 SHA-256 去重；归档解包会校验路径穿越和体积边界。
+- Access Token 为短期令牌；Refresh Token 使用 HttpOnly Cookie 并支持轮换，
+  Refresh/Logout 同时校验与令牌绑定的 CSRF cookie/header 和允许的 Origin。
+- 管理员登录按账户、来源及身份/来源组合持久化限流；来源地址只保存 HMAC 指纹。
+- 上传文件按 SHA-256 去重；归档解包会校验路径穿越和体积边界。物理删除失败进入持久化
+  重试队列，孤儿扫描只处理合法 UUID 路径且受宽限期和数据库引用保护。
+- 简历照片先完整解码、校验 MIME/格式、尺寸、总像素和帧数，再去除元数据并规范化重编码；
+  损坏、截断、动画和解压炸弹图片会被拒绝。
 - 应用、本地模型和数据库默认使用回环地址。对外部署时应放在受控反向代理之后并启用 TLS。
 - `data/` 中可能包含原始录音和敏感转写；数据库备份与文件备份必须采用相同的访问控制和保留策略。
 - 禁止提交 `.env`、真实 API Key、数据库密码、个人信息、录音、转写和模型权重。

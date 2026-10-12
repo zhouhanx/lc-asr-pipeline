@@ -141,19 +141,23 @@ class StepFunASRProvider:
     def invoke(self, request: TranscriptionRequest) -> TranscriptionResult:
         if request.diarize:
             raise ValueError("StepFun SSE provider does not support speaker diarization")
-        with self._supported_audio(request.audio_path) as audio, httpx.Client(
-            timeout=self.timeout,
-            transport=self.transport,
-        ) as client, client.stream(
-            "POST",
-            self.endpoint(),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Accept": "text/event-stream",
-                "Content-Type": "application/json",
-            },
-            json=self._payload(audio, request),
-        ) as response:
+        with (
+            self._supported_audio(request.audio_path) as audio,
+            httpx.Client(
+                timeout=self.timeout,
+                transport=self.transport,
+            ) as client,
+            client.stream(
+                "POST",
+                self.endpoint(),
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Accept": "text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                json=self._payload(audio, request),
+            ) as response,
+        ):
             response.raise_for_status()
             return self._result(response)
 

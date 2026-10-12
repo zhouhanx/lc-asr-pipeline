@@ -26,7 +26,7 @@ async def list_resume_projects(
     account: ResumeProjectReader,
     database: DatabaseDependency,
 ) -> list[ResumeProjectResponse]:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         rows = await repository.list_for_tenant(
             connection,
             tenant_id=account.tenant_id,
@@ -39,7 +39,7 @@ async def resume_project_summary(
     account: ResumeProjectReader,
     database: DatabaseDependency,
 ) -> ResumeProjectSummary:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.summary(
             connection,
             tenant_id=account.tenant_id,

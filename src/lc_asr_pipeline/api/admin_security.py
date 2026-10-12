@@ -35,7 +35,7 @@ async def _resolve_admin(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired administrator token",
         ) from error
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         admin = await AdminRepository().find_active_by_id(connection, claims.admin_id)
     if admin is None:
         raise HTTPException(

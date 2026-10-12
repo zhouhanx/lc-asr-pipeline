@@ -7,6 +7,7 @@ import {
   FileScan,
   FileText,
   FileUp,
+  FilePenLine,
   Globe2,
   FolderKanban,
   LayoutDashboard,
@@ -56,6 +57,30 @@ export const navigationGroups: NavigationGroup[] = [
         description: '上传图片或 PDF 并创建 OCR 任务',
         permission: 'jobs:read',
         icon: FileScan,
+      },
+      {
+        id: 'document-writing',
+        label: '文档撰写',
+        description: '使用业务素材撰写简历和演示文稿',
+        permission: 'jobs:read',
+        icon: FilePenLine,
+        children: [
+          {
+            id: 'resume-writer',
+            label: '简历撰写',
+            description: '选择已上传简历并进行模板化编辑',
+            permission: 'jobs:read',
+            icon: FileText,
+          },
+          {
+            id: 'ppt-writer',
+            label: 'PPT撰写',
+            description: '演示文稿撰写能力将在后续开放',
+            permission: 'jobs:read',
+            icon: FilePenLine,
+            badge: 'SOON',
+          },
+        ],
       },
       {
         id: 'models',

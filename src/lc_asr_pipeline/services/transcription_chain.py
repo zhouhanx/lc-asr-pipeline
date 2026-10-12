@@ -14,4 +14,3 @@ def build_transcription_chain(
         input_type=TranscriptionRequest,
         output_type=TranscriptionResult,
     )
-

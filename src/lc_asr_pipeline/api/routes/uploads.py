@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-import shutil
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
@@ -27,12 +26,17 @@ from lc_asr_pipeline.schemas.upload import (
     UploadProgressResponse,
 )
 from lc_asr_pipeline.services.archive import extract_audio_archive
-from lc_asr_pipeline.services.storage import delete_uploaded_file_storage
+from lc_asr_pipeline.services.storage import process_pending_storage_deletions
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 repository = UploadRepository()
 UploadWriter = Annotated[Account, Security(get_current_account, scopes=["jobs:write"])]
 UploadReader = Annotated[Account, Security(get_current_account, scopes=["jobs:read"])]
+
+
+def enforce_upload_batch_size(total_bytes: int, maximum_bytes: int) -> None:
+    if total_bytes > maximum_bytes:
+        raise HTTPException(status_code=413, detail="Upload batch exceeds 5 GiB")
 
 
 def _file_root(data_path: Path, tenant_id: UUID, file_id: UUID) -> Path:
@@ -67,7 +71,7 @@ async def upload_history(
     database: DatabaseDependency,
     file_kind: Literal["audio", "image", "pdf"] | None = None,
 ) -> list[HistoricalFileResponse]:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         rows = await repository.list_history(
             connection,
             tenant_id=account.tenant_id,
@@ -86,9 +90,12 @@ async def delete_historical_file(
     database: DatabaseDependency,
     settings: SettingsDependency,
 ) -> HistoricalFileDeleteResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         result = await repository.delete_file_for_tenant(
-            connection, tenant_id=account.tenant_id, file_id=file_id
+            connection,
+            tenant_id=account.tenant_id,
+            file_id=file_id,
+            deletion_reason="history_delete",
         )
         if result is None:
             raise HTTPException(status_code=404, detail="Historical file not found")
@@ -97,11 +104,11 @@ async def delete_historical_file(
                 status_code=409,
                 detail="文件存在运行中的任务，请先取消或等待完成后再删除。",
             )
-    delete_uploaded_file_storage(
+    await process_pending_storage_deletions(
+        database,
         data_path=settings.data_path,
-        tenant_id=account.tenant_id,
-        root_file_id=result["root_file_id"],
-        exact_storage_path=result["exact_storage_path"],
+        limit=1,
+        deletion_ids=[int(result["deletion_id"])],
     )
     return HistoricalFileDeleteResponse(
         id=file_id,
@@ -122,9 +129,8 @@ async def create_batch(
     settings: SettingsDependency,
 ) -> UploadBatchResponse:
     total_bytes = sum(item.size_bytes for item in payload.files)
-    if total_bytes > settings.upload_batch_max_bytes:
-        raise HTTPException(status_code=413, detail="Upload batch exceeds 5 GiB")
-    async with database.connection() as connection:
+    enforce_upload_batch_size(total_bytes, settings.upload_batch_max_bytes)
+    async with database.tenant_connection(account.tenant_id) as connection:
         batch, files = await repository.create_batch(
             connection,
             tenant_id=account.tenant_id,
@@ -145,7 +151,7 @@ async def cancel_batch(
     database: DatabaseDependency,
     settings: SettingsDependency,
 ) -> UploadCancelResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         file_ids = await repository.cancel_batch(
             connection,
             tenant_id=account.tenant_id,
@@ -153,9 +159,12 @@ async def cancel_batch(
         )
     if file_ids is None:
         raise HTTPException(status_code=409, detail="Upload batch cannot be cancelled")
-    for file_id in file_ids:
-        target = _file_root(settings.data_path, account.tenant_id, file_id)
-        shutil.rmtree(target, ignore_errors=True)
+    if file_ids:
+        await process_pending_storage_deletions(
+            database,
+            data_path=settings.data_path,
+            limit=len(file_ids),
+        )
     return UploadCancelResponse(
         id=batch_id,
         status="cancelled",
@@ -169,7 +178,7 @@ async def upload_progress(
     account: UploadWriter,
     database: DatabaseDependency,
 ) -> UploadProgressResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         item = await repository.get_file_for_update(
             connection, tenant_id=account.tenant_id, file_id=file_id
         )
@@ -197,7 +206,7 @@ async def upload_chunk(
     settings: SettingsDependency,
     x_chunk_sha256: Annotated[str, Header(pattern=r"^[a-fA-F0-9]{64}$")],
 ) -> None:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         item = await repository.get_file_for_update(
             connection, tenant_id=account.tenant_id, file_id=file_id
         )
@@ -243,10 +252,12 @@ async def upload_chunk(
             await connection.execute(
                 """
                 INSERT INTO upload_chunks
-                    (file_id, chunk_index, offset_bytes, size_bytes, sha256, storage_path)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (tenant_id, file_id, chunk_index, offset_bytes, size_bytes, sha256,
+                     storage_path)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
+                    account.tenant_id,
                     file_id,
                     chunk_index,
                     chunk_index * int(item["chunk_size"]),
@@ -280,7 +291,7 @@ async def complete_upload(
     database: DatabaseDependency,
     settings: SettingsDependency,
 ) -> UploadCompleteResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         item = await repository.get_file_for_update(
             connection, tenant_id=account.tenant_id, file_id=file_id
         )
@@ -292,9 +303,7 @@ async def complete_upload(
         if indices != list(range(expected_chunks)):
             raise HTTPException(status_code=409, detail="Upload has missing chunks")
         if item["status"] == "ready":
-            child_ids = await repository.ready_child_ids(
-                connection, parent_file_id=file_id
-            )
+            child_ids = await repository.ready_child_ids(connection, parent_file_id=file_id)
             return UploadCompleteResponse(
                 file_id=file_id,
                 status="ready",

@@ -1,6 +1,6 @@
 import type { PropsWithChildren, ReactNode } from 'react'
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 
 type AuthShellProps = PropsWithChildren<{
   title: string
@@ -37,7 +37,7 @@ export function AuthShell({
         </CardHeader>
         <CardHeader className="px-6 pt-7 sm:px-8">
           <p className="font-mono text-xs tracking-[0.2em] text-muted-foreground">{eyebrow}</p>
-          <CardTitle className="font-head text-4xl uppercase">{title}</CardTitle>
+          <h1 className="font-head text-4xl font-medium uppercase">{title}</h1>
           <CardDescription className="text-base leading-7">{description}</CardDescription>
         </CardHeader>
         <CardContent className="px-6 pb-8 sm:px-8">{children}</CardContent>

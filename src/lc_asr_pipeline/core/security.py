@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -159,9 +160,7 @@ def create_platform_admin_token(
         "iat": now,
         "exp": expires_at,
         "type": (
-            "platform_admin_password_change"
-            if password_change_only
-            else "platform_admin_access"
+            "platform_admin_password_change" if password_change_only else "platform_admin_access"
         ),
     }
     token = jwt.encode(
@@ -228,3 +227,31 @@ def new_refresh_token() -> str:
 def hash_refresh_token(token: str) -> str:
     """Hash a refresh token before persistence."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_csrf_token(refresh_token: str, settings: Settings) -> str:
+    """Bind a readable CSRF token to one opaque HttpOnly refresh token."""
+    return hmac.new(
+        settings.auth_secret_key.get_secret_value().encode("utf-8"),
+        f"lc-asr-csrf-v1:{refresh_token}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def verify_csrf_token(
+    refresh_token: str,
+    submitted_token: str,
+    settings: Settings,
+) -> bool:
+    """Return whether a submitted CSRF token matches the refresh session."""
+    expected = create_csrf_token(refresh_token, settings)
+    return hmac.compare_digest(expected, submitted_token)
+
+
+def admin_login_fingerprint(value: str, settings: Settings) -> str:
+    """HMAC sensitive login-source identifiers before database persistence."""
+    return hmac.new(
+        settings.auth_secret_key.get_secret_value().encode("utf-8"),
+        f"lc-asr-admin-login-v1:{value}".encode(),
+        hashlib.sha256,
+    ).hexdigest()

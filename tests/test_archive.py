@@ -50,4 +50,3 @@ def test_extract_audio_archive_enforces_expanded_size(tmp_path: Path) -> None:
             archive_type="zip",
             max_bytes=10,
         )
-

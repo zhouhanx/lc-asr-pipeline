@@ -29,7 +29,7 @@ async def list_ocr_jobs(
     account: OCRReader,
     database: DatabaseDependency,
 ) -> list[OCRJobResponse]:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         rows = await repository.list_for_tenant(
             connection,
             tenant_id=account.tenant_id,
@@ -47,7 +47,7 @@ async def create_ocr_jobs(
     account: OCRWriter,
     database: DatabaseDependency,
 ) -> list[OCRJobResponse]:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         rows = await repository.create_jobs(
             connection,
             tenant_id=account.tenant_id,
@@ -74,7 +74,7 @@ async def ocr_job_detail(
     account: OCRReader,
     database: DatabaseDependency,
 ) -> OCRJobDetail:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.get_for_tenant(
             connection,
             tenant_id=account.tenant_id,
@@ -91,7 +91,7 @@ async def cancel_ocr_job(
     account: OCRWriter,
     database: DatabaseDependency,
 ) -> OCRJobResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.request_cancel(
             connection,
             tenant_id=account.tenant_id,
@@ -108,7 +108,7 @@ async def retry_ocr_job(
     account: OCRWriter,
     database: DatabaseDependency,
 ) -> OCRJobResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.retry(
             connection,
             tenant_id=account.tenant_id,
@@ -125,7 +125,7 @@ async def delete_ocr_job(
     account: OCRWriter,
     database: DatabaseDependency,
 ) -> OCRJobDeleteResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         result = await repository.delete(
             connection,
             tenant_id=account.tenant_id,
@@ -147,7 +147,7 @@ async def export_ocr_job(
 ) -> Response:
     if export_format not in {"md", "json"}:
         raise HTTPException(status_code=422, detail="Unsupported OCR export format")
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.get_for_tenant(
             connection,
             tenant_id=account.tenant_id,

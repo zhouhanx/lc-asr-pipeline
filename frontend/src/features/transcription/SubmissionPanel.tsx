@@ -19,7 +19,8 @@ import {
   type UploadBatch,
 } from '@/lib/api'
 
-const MAX_BATCH_BYTES = 5 * 1024 ** 3
+import { MAX_BATCH_BYTES, uploadBatchSizeError } from './upload-limits'
+
 const HASH_CHUNK_BYTES = 8 * 1024 ** 2
 
 type Props = { session: AuthPayload; onOpenTasks: () => void; onOpenHistory: () => void }
@@ -105,7 +106,7 @@ export function SubmissionPanel({ session, onOpenTasks, onOpenHistory }: Props) 
     if (!incoming) return
     const selected = Array.from(incoming) as BrowserFile[]
     const size = selected.reduce((sum, file) => sum + file.size, 0)
-    setError(size > MAX_BATCH_BYTES ? '单次上传总量不能超过 5 GiB。' : '')
+    setError(uploadBatchSizeError(size))
     setFiles(selected)
     setProgress(0)
     setSubmitted(0)

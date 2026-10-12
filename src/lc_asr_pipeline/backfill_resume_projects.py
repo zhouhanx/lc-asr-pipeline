@@ -24,7 +24,7 @@ async def _jobs_to_process(
     *,
     refresh: bool,
 ) -> list[dict[str, Any]]:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         cursor = await connection.execute(
             """
             SELECT job.id, job.tenant_id, job.uploaded_file_id,
@@ -77,7 +77,7 @@ async def backfill_resume_projects(*, refresh: bool = False) -> tuple[int, int]:
             extraction = await build_resume_project_extraction_chain(extractor).ainvoke(
                 ResumeProjectExtractionRequest(markdown_text=str(row["markdown_text"]))
             )
-            async with database.connection() as connection:
+            async with database.system_connection() as connection:
                 await repository.replace_extraction(
                     connection,
                     tenant_id=tenant_id,

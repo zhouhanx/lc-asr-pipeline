@@ -20,6 +20,10 @@ from lc_asr_pipeline.worker import (
 )
 
 
+def _csrf_headers(client: httpx.AsyncClient) -> dict[str, str]:
+    return {"X-CSRF-Token": client.cookies["lc_asr_csrf"]}
+
+
 @pytest.mark.integration
 async def test_tenant_registration_login_refresh_and_isolation() -> None:
     suffix = uuid4().hex[:12]
@@ -42,7 +46,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             try:
                 database = app.state.database
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     await connection.execute(
                         """
                         INSERT INTO platform_admins (
@@ -146,24 +150,18 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 assert initial_login.json()["password_change_required"] is True
                 blocked_before_change = await client.get(
                     "/api/v1/auth/me",
-                    headers={
-                        "Authorization": f"Bearer {initial_login.json()['access_token']}"
-                    },
+                    headers={"Authorization": f"Bearer {initial_login.json()['access_token']}"},
                 )
                 assert blocked_before_change.status_code == 401
                 changed_password = await client.post(
                     "/api/v1/auth/change-initial-password",
-                    headers={
-                        "Authorization": f"Bearer {initial_login.json()['access_token']}"
-                    },
+                    headers={"Authorization": f"Bearer {initial_login.json()['access_token']}"},
                     json={"new_password": password},
                 )
                 assert changed_password.status_code == 204, changed_password.text
                 stale_initial_token = await client.get(
                     "/api/v1/auth/me",
-                    headers={
-                        "Authorization": f"Bearer {initial_login.json()['access_token']}"
-                    },
+                    headers={"Authorization": f"Bearer {initial_login.json()['access_token']}"},
                 )
                 assert stale_initial_token.status_code == 401
                 registration = await client.post(
@@ -181,6 +179,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 assert "tenant:manage" in auth["permissions"]
                 assert "lc_asr_refresh" in client.cookies
                 first_refresh_token = client.cookies["lc_asr_refresh"]
+                first_csrf_token = client.cookies["lc_asr_csrf"]
 
                 me = await client.get(
                     "/api/v1/auth/me",
@@ -213,9 +212,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     "unavailable",
                     "misconfigured",
                 }
-                ocr_model = next(
-                    item for item in models.json() if item["model_kind"] == "ocr"
-                )
+                ocr_model = next(item for item in models.json() if item["model_kind"] == "ocr")
                 edited_ocr_model = await client.put(
                     f"/api/v1/models/{ocr_model['id']}",
                     headers={"Authorization": f"Bearer {auth['access_token']}"},
@@ -335,11 +332,13 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     headers={"Authorization": f"Bearer {auth['access_token']}"},
                     json={
                         "name": "Upload integration",
-                        "files": [{
-                            "relative_path": "folder/sample.wav",
-                            "size_bytes": len(audio),
-                            "sha256": digest,
-                        }],
+                        "files": [
+                            {
+                                "relative_path": "folder/sample.wav",
+                                "size_bytes": len(audio),
+                                "sha256": digest,
+                            }
+                        ],
                     },
                 )
                 assert batch.status_code == 201, batch.text
@@ -376,11 +375,13 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     headers={"Authorization": f"Bearer {auth['access_token']}"},
                     json={
                         "name": "Deduplicated upload",
-                        "files": [{
-                            "relative_path": "renamed-copy.wav",
-                            "size_bytes": len(audio),
-                            "sha256": digest,
-                        }],
+                        "files": [
+                            {
+                                "relative_path": "renamed-copy.wav",
+                                "size_bytes": len(audio),
+                                "sha256": digest,
+                            }
+                        ],
                     },
                 )
                 assert deduplicated_batch.status_code == 201, deduplicated_batch.text
@@ -412,7 +413,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 task_id = f"ASR-{job_id}"
                 assert jobs.json()[0]["task_id"] == task_id
                 database = app.state.database
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     await connection.execute(
                         """
                         UPDATE transcription_jobs
@@ -442,7 +443,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 assert cancelled.status_code == 200, cancelled.text
                 assert cancelled.json()["status"] == "cancelled"
 
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     await connection.execute(
                         """
                         UPDATE transcription_jobs
@@ -462,18 +463,22 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 asr_checkpoint = {
                     "text": "语音模型已经解析完成",
                     "language": "Chinese",
-                    "segments": [{
-                        "text": "语音模型已经解析完成",
-                        "start": 0,
-                        "end": 1.25,
-                        "speaker": None,
-                    }],
-                    "speaker_segments": [{
-                        "text": "语音模型已经解析完成",
-                        "start": 0,
-                        "end": 1.25,
-                        "speaker": "SPEAKER_00",
-                    }],
+                    "segments": [
+                        {
+                            "text": "语音模型已经解析完成",
+                            "start": 0,
+                            "end": 1.25,
+                            "speaker": None,
+                        }
+                    ],
+                    "speaker_segments": [
+                        {
+                            "text": "语音模型已经解析完成",
+                            "start": 0,
+                            "end": 1.25,
+                            "speaker": "SPEAKER_00",
+                        }
+                    ],
                     "provider": "checkpoint-provider",
                     "model": "checkpoint-model",
                 }
@@ -487,7 +492,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     TranscriptionResult.model_validate(asr_checkpoint),
                 )
                 assert checkpoint_attempt == 1
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     await connection.execute(
                         """
                         UPDATE transcription_jobs
@@ -527,10 +532,10 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 assert retained_after_failure.json()["status"] == "refining"
                 assert retained_after_failure.json()["progress_percent"] == 75
                 assert retained_after_failure.json()["has_asr_checkpoint"] is True
-                assert "refinement retry scheduled" in (
-                    retained_after_failure.json()["error_message"]
+                assert (
+                    "refinement retry scheduled" in (retained_after_failure.json()["error_message"])
                 )
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     await connection.execute(
                         """
                         UPDATE transcription_jobs SET next_attempt_at = now()
@@ -545,7 +550,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 assert claimed_refinement_retry.refinement_attempt == 2
                 assert claimed_refinement_retry.asr_result_checkpoint == asr_checkpoint
 
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     transcript = await (
                         await connection.execute(
                             """
@@ -567,11 +572,11 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     await connection.execute(
                         """
                         INSERT INTO transcript_segments (
-                            transcript_id, segment_index, start_seconds,
+                            tenant_id, transcript_id, segment_index, start_seconds,
                             end_seconds, speaker, text
-                        ) VALUES (%s, 0, 0, 1.25, 'SPEAKER_00', '测试文本')
+                        ) VALUES (%s, %s, 0, 0, 1.25, 'SPEAKER_00', '测试文本')
                         """,
-                        (transcript["id"],),
+                        (auth["tenant"]["id"], transcript["id"]),
                     )
                     await connection.execute(
                         """
@@ -729,11 +734,13 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     headers={"Authorization": f"Bearer {auth['access_token']}"},
                     json={
                         "name": "Archive integration",
-                        "files": [{
-                            "relative_path": "interviews.zip",
-                            "size_bytes": len(archive_bytes),
-                            "archive_type": "zip",
-                        }],
+                        "files": [
+                            {
+                                "relative_path": "interviews.zip",
+                                "size_bytes": len(archive_bytes),
+                                "archive_type": "zip",
+                            }
+                        ],
                     },
                 )
                 assert archive_batch.status_code == 201, archive_batch.text
@@ -796,21 +803,41 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 )
                 assert deleted_archive_job.status_code == 404
 
-                refreshed = await client.post("/api/v1/auth/refresh")
+                missing_csrf = await client.post("/api/v1/auth/refresh")
+                assert missing_csrf.status_code == 403
+                invalid_origin = await client.post(
+                    "/api/v1/auth/refresh",
+                    headers={
+                        **_csrf_headers(client),
+                        "Origin": "https://attacker.invalid",
+                    },
+                )
+                assert invalid_origin.status_code == 403
+                refreshed = await client.post(
+                    "/api/v1/auth/refresh",
+                    headers=_csrf_headers(client),
+                )
                 assert refreshed.status_code == 200, refreshed.text
                 assert refreshed.json()["access_token"] != auth["access_token"]
                 assert client.cookies["lc_asr_refresh"] != first_refresh_token
+                assert client.cookies["lc_asr_csrf"] != first_csrf_token
 
                 async with httpx.AsyncClient(
                     transport=transport,
                     base_url="http://testserver",
-                    cookies={"lc_asr_refresh": first_refresh_token},
+                    cookies={
+                        "lc_asr_refresh": first_refresh_token,
+                        "lc_asr_csrf": first_csrf_token,
+                    },
                 ) as replay_client:
-                    replay = await replay_client.post("/api/v1/auth/refresh")
+                    replay = await replay_client.post(
+                        "/api/v1/auth/refresh",
+                        headers={"X-CSRF-Token": first_csrf_token},
+                    )
                     assert replay.status_code == 401
 
                 database = app.state.database
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     await connection.execute(
                         """
                         DELETE FROM role_permissions rp
@@ -879,9 +906,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 second_changed = await client.post(
                     "/api/v1/auth/change-initial-password",
                     headers={
-                        "Authorization": (
-                            f"Bearer {second_initial_login.json()['access_token']}"
-                        )
+                        "Authorization": (f"Bearer {second_initial_login.json()['access_token']}")
                     },
                     json={"new_password": second_password},
                 )
@@ -936,9 +961,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 disabled_access = await client.get(
                     "/api/v1/auth/me",
                     headers={
-                        "Authorization": (
-                            f"Bearer {second_registration.json()['access_token']}"
-                        )
+                        "Authorization": (f"Bearer {second_registration.json()['access_token']}")
                     },
                 )
                 assert disabled_access.status_code == 401
@@ -1047,9 +1070,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 reset_changed = await client.post(
                     "/api/v1/auth/change-initial-password",
                     headers={
-                        "Authorization": (
-                            f"Bearer {reset_initial_login.json()['access_token']}"
-                        )
+                        "Authorization": (f"Bearer {reset_initial_login.json()['access_token']}")
                     },
                     json={"new_password": second_reset_password},
                 )
@@ -1068,9 +1089,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 cross_tenant_upload = await client.get(
                     f"/api/v1/uploads/files/{upload_file['id']}",
                     headers={
-                        "Authorization": (
-                            f"Bearer {second_registration.json()['access_token']}"
-                        )
+                        "Authorization": (f"Bearer {second_registration.json()['access_token']}")
                     },
                 )
                 assert cross_tenant_upload.status_code == 404
@@ -1078,9 +1097,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 cross_tenant_delete = await client.delete(
                     f"/api/v1/jobs/{job_id}",
                     headers={
-                        "Authorization": (
-                            f"Bearer {second_registration.json()['access_token']}"
-                        )
+                        "Authorization": (f"Bearer {second_registration.json()['access_token']}")
                     },
                 )
                 assert cross_tenant_delete.status_code == 404
@@ -1110,16 +1127,16 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                     headers={"Authorization": f"Bearer {auth['access_token']}"},
                 )
                 assert historical_after_model_deletion.status_code == 200
-                assert historical_after_model_deletion.json()["provider_name"] == (
-                    models.json()[0]["name"]
+                assert (
+                    historical_after_model_deletion.json()["provider_name"]
+                    == (models.json()[0]["name"])
                 )
-                assert historical_after_model_deletion.json()["text_provider_name"] == (
-                    text_model.json()["name"]
+                assert (
+                    historical_after_model_deletion.json()["text_provider_name"]
+                    == (text_model.json()["name"])
                 )
                 assert historical_after_model_deletion.json()["provider_deleted"] is True
-                assert (
-                    historical_after_model_deletion.json()["text_provider_deleted"] is True
-                )
+                assert historical_after_model_deletion.json()["text_provider_deleted"] is True
                 active_models_after_deletion = await client.get(
                     "/api/v1/models",
                     headers={"Authorization": f"Bearer {auth['access_token']}"},
@@ -1133,7 +1150,7 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 )
                 assert export_after_model_deletion.status_code == 200
 
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     preserved = await (
                         await connection.execute(
                             "SELECT storage_path FROM uploaded_files WHERE id = %s",
@@ -1177,11 +1194,14 @@ async def test_tenant_registration_login_refresh_and_isolation() -> None:
                 )
                 assert deleted_tenant_login.status_code == 401
 
-                logout = await client.post("/api/v1/auth/logout")
+                logout = await client.post(
+                    "/api/v1/auth/logout",
+                    headers=_csrf_headers(client),
+                )
                 assert logout.status_code == 200
             finally:
                 database = app.state.database
-                async with database.connection() as connection:
+                async with database.system_connection() as connection:
                     await connection.execute(
                         "DELETE FROM tenants WHERE slug IN (%s, %s)",
                         (tenant_slug, second_tenant_slug),

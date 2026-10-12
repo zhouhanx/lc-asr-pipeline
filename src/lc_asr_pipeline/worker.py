@@ -73,7 +73,7 @@ class ClaimedJob:
 
 
 async def recover_stale_jobs(database: Database) -> int:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         cancelled = await connection.execute(
             """
             UPDATE transcription_jobs
@@ -145,7 +145,7 @@ async def recover_stale_jobs(database: Database) -> int:
 
 
 async def claim_job(database: Database) -> ClaimedJob | None:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         row = await (
             await connection.execute(
                 """
@@ -219,7 +219,7 @@ async def claim_job(database: Database) -> ClaimedJob | None:
 async def _heartbeat_until_cancel(database: Database, job: ClaimedJob) -> bool:
     while True:
         await asyncio.sleep(HEARTBEAT_SECONDS)
-        async with database.connection() as connection:
+        async with database.system_connection() as connection:
             row = await (
                 await connection.execute(
                     """
@@ -239,7 +239,7 @@ async def _heartbeat_until_cancel(database: Database, job: ClaimedJob) -> bool:
 
 
 async def _mark_cancelled(database: Database, job: ClaimedJob) -> None:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         changed = await connection.execute(
             """
             UPDATE transcription_jobs
@@ -274,7 +274,7 @@ async def persist_result(
 ) -> None:
     segments = result.speaker_segments or result.segments
     duration = max((segment.end for segment in segments), default=None)
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         state = await (
             await connection.execute(
                 """
@@ -336,11 +336,12 @@ async def persist_result(
             await connection.execute(
                 """
                 INSERT INTO transcript_segments (
-                    transcript_id, segment_index, start_seconds,
+                    tenant_id, transcript_id, segment_index, start_seconds,
                     end_seconds, speaker, text
-                ) VALUES (%s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
+                    job.tenant_id,
                     transcript["id"],
                     index,
                     segment.start,
@@ -385,7 +386,7 @@ async def persist_asr_checkpoint(
     job: ClaimedJob,
     result: TranscriptionResult,
 ) -> int:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         row = await (
             await connection.execute(
                 """
@@ -484,7 +485,7 @@ async def _run_refinement_stage(
 
 
 async def fail_job(database: Database, job: ClaimedJob, exc: Exception) -> None:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         state = await (
             await connection.execute(
                 """

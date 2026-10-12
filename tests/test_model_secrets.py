@@ -28,11 +28,14 @@ def test_model_secret_round_trip_is_tenant_bound_and_randomized() -> None:
 
     assert first != second
     assert b"sk-tenant-secret" not in first
-    assert decrypt_model_secret(
-        first,
-        master_secret=MASTER_SECRET,
-        tenant_id=tenant_id,
-    ) == "sk-tenant-secret"
+    assert (
+        decrypt_model_secret(
+            first,
+            master_secret=MASTER_SECRET,
+            tenant_id=tenant_id,
+        )
+        == "sk-tenant-secret"
+    )
 
     with pytest.raises(ModelSecretError):
         decrypt_model_secret(

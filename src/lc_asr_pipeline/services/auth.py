@@ -65,7 +65,7 @@ class AuthService:
         ip_address: str | None,
     ) -> AuthResult:
         normalized_email = str(request.email).strip().casefold()
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             login_account = await self._repository.find_login_account(
                 connection,
                 tenant_slug=request.tenant_slug,
@@ -81,7 +81,7 @@ class AuthService:
         if login_account is None or not password_valid:
             raise InvalidCredentialsError("Invalid tenant or credentials")
 
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             return await self._issue_session(
                 connection=connection,
                 account=login_account.account,
@@ -98,7 +98,7 @@ class AuthService:
     ) -> AuthResult:
         token_hash = hash_refresh_token(refresh_token)
         now = datetime.now(timezone.utc)
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             session = await self._repository.find_refresh_session_for_update(
                 connection,
                 token_hash=token_hash,
@@ -122,7 +122,7 @@ class AuthService:
             return result
 
     async def logout(self, refresh_token: str) -> None:
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             await self._repository.revoke_refresh_session(
                 connection,
                 token_hash=hash_refresh_token(refresh_token),
@@ -131,7 +131,7 @@ class AuthService:
     async def change_initial_password(self, account: Account, new_password: str) -> bool:
         validate_password_policy(new_password, account.email)
         password_digest = await to_thread.run_sync(hash_password, new_password)
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             return await self._repository.change_password(
                 connection,
                 account=account,
@@ -146,7 +146,7 @@ class AuthService:
         new_password: str,
     ) -> bool:
         validate_password_policy(new_password, account.email)
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             current_digest = await self._repository.password_hash_for_account(
                 connection,
                 account=account,

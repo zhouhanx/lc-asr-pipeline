@@ -8,9 +8,11 @@ CONTROL_LOG="$LOG_DIR/dev.log"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 WORKER_LOG="$LOG_DIR/worker.log"
+RETENTION_LOG="$LOG_DIR/retention.log"
 BACKEND_PID_FILE="$LOG_DIR/backend.pid"
 FRONTEND_PID_FILE="$LOG_DIR/frontend.pid"
 WORKER_PID_FILE="$LOG_DIR/worker.pid"
+RETENTION_PID_FILE="$LOG_DIR/retention.pid"
 
 CONDA_ENV_NAME=${CONDA_ENV_NAME:-lc-asr-pipeline}
 BACKEND_HOST=${BACKEND_HOST:-127.0.0.1}
@@ -19,7 +21,7 @@ FRONTEND_HOST=${FRONTEND_HOST:-127.0.0.1}
 FRONTEND_PORT=${FRONTEND_PORT:-5173}
 
 mkdir -p "$LOG_DIR"
-touch "$CONTROL_LOG" "$BACKEND_LOG" "$FRONTEND_LOG" "$WORKER_LOG"
+touch "$CONTROL_LOG" "$BACKEND_LOG" "$FRONTEND_LOG" "$WORKER_LOG" "$RETENTION_LOG"
 
 log() {
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
@@ -90,7 +92,8 @@ start_backend() {
     log "starting backend at http://$BACKEND_HOST:$BACKEND_PORT (log: $BACKEND_LOG)"
     cd "$PROJECT_ROOT" || return 1
     nohup "$python_bin" -m uvicorn lc_asr_pipeline.main:app \
-        --host "$BACKEND_HOST" --port "$BACKEND_PORT" >>"$BACKEND_LOG" 2>&1 &
+        --host "$BACKEND_HOST" --port "$BACKEND_PORT" --no-server-header \
+        >>"$BACKEND_LOG" 2>&1 &
     backend_pid=$!
     printf '%s\n' "$backend_pid" >"$BACKEND_PID_FILE"
     sleep 1
@@ -159,6 +162,30 @@ start_worker() {
     log "worker started (PID $worker_pid)"
 }
 
+start_retention() {
+    existing_pid=$(read_pid "$RETENTION_PID_FILE")
+    if process_matches "$existing_pid" 'lc_asr_pipeline.retention_worker'; then
+        log "retention worker already running (PID $existing_pid)"
+        return 0
+    fi
+    python_bin=$(resolve_python) || {
+        log "retention worker not started: Conda environment '$CONDA_ENV_NAME' is unavailable"
+        return 1
+    }
+    log "starting retention worker (log: $RETENTION_LOG)"
+    cd "$PROJECT_ROOT" || return 1
+    nohup "$python_bin" -m lc_asr_pipeline.retention_worker >>"$RETENTION_LOG" 2>&1 &
+    retention_pid=$!
+    printf '%s\n' "$retention_pid" >"$RETENTION_PID_FILE"
+    sleep 1
+    if ! process_matches "$retention_pid" 'lc_asr_pipeline.retention_worker'; then
+        log "retention worker failed to start; recent output follows"
+        tail -n 20 "$RETENTION_LOG"
+        return 1
+    fi
+    log "retention worker started (PID $retention_pid)"
+}
+
 stop_service() {
     service_name=$1
     pid_file=$2
@@ -190,6 +217,7 @@ show_status() {
     backend_pid=$(read_pid "$BACKEND_PID_FILE")
     frontend_pid=$(read_pid "$FRONTEND_PID_FILE")
     worker_pid=$(read_pid "$WORKER_PID_FILE")
+    retention_pid=$(read_pid "$RETENTION_PID_FILE")
     if process_matches "$backend_pid" 'lc_asr_pipeline.main:app'; then
         log "backend: running (PID $backend_pid, http://$BACKEND_HOST:$BACKEND_PORT)"
     else
@@ -205,6 +233,11 @@ show_status() {
     else
         log "worker: stopped"
     fi
+    if process_matches "$retention_pid" 'lc_asr_pipeline.retention_worker'; then
+        log "retention worker: running (PID $retention_pid)"
+    else
+        log "retention worker: stopped"
+    fi
 }
 
 start_all() {
@@ -213,7 +246,13 @@ start_all() {
         stop_service backend "$BACKEND_PID_FILE" 'lc_asr_pipeline.main:app'
         return 1
     fi
+    if ! start_retention; then
+        stop_service worker "$WORKER_PID_FILE" 'lc_asr_pipeline.worker'
+        stop_service backend "$BACKEND_PID_FILE" 'lc_asr_pipeline.main:app'
+        return 1
+    fi
     if ! start_frontend; then
+        stop_service retention-worker "$RETENTION_PID_FILE" 'lc_asr_pipeline.retention_worker'
         stop_service worker "$WORKER_PID_FILE" 'lc_asr_pipeline.worker'
         stop_service backend "$BACKEND_PID_FILE" 'lc_asr_pipeline.main:app'
         return 1
@@ -223,6 +262,7 @@ start_all() {
 
 stop_all() {
     stop_service frontend "$FRONTEND_PID_FILE" 'node_modules/vite/bin/vite.js'
+    stop_service retention-worker "$RETENTION_PID_FILE" 'lc_asr_pipeline.retention_worker'
     stop_service worker "$WORKER_PID_FILE" 'lc_asr_pipeline.worker'
     stop_service backend "$BACKEND_PID_FILE" 'lc_asr_pipeline.main:app'
 }
@@ -238,7 +278,7 @@ case "${1:-}" in
     status) show_status ;;
     logs)
         log "following backend, worker, and frontend logs; press Ctrl-C to exit"
-        tail -n 100 -f "$BACKEND_LOG" "$WORKER_LOG" "$FRONTEND_LOG"
+        tail -n 100 -f "$BACKEND_LOG" "$WORKER_LOG" "$RETENTION_LOG" "$FRONTEND_LOG"
         ;;
     *) usage; exit 2 ;;
 esac

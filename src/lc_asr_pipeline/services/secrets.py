@@ -12,4 +12,3 @@ def resolve_secret_reference(name: str | None) -> str:
         return ""
     values = dotenv_values(".env")
     return os.getenv(name) or values.get(name) or ""
-

@@ -22,7 +22,7 @@ from lc_asr_pipeline.schemas.job import (
     TranscriptionJobResponse,
     TranscriptionJobVisibilityUpdate,
 )
-from lc_asr_pipeline.services.storage import delete_uploaded_file_storage
+from lc_asr_pipeline.services.storage import process_pending_storage_deletions
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 repository = JobRepository()
@@ -37,7 +37,7 @@ async def list_jobs(
     account: JobReader,
     database: DatabaseDependency,
 ) -> list[TranscriptionJobResponse]:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         rows = await repository.list_for_tenant(connection, tenant_id=account.tenant_id)
     return [TranscriptionJobResponse.model_validate(row) for row in rows]
 
@@ -47,7 +47,7 @@ async def list_public_jobs(
     _: CurrentAccount,
     database: DatabaseDependency,
 ) -> list[PublicTranscriptionJobResponse]:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         rows = await repository.list_public(connection)
     return [PublicTranscriptionJobResponse.model_validate(row) for row in rows]
 
@@ -59,7 +59,7 @@ async def public_job_detail(
     database: DatabaseDependency,
     include_segments: bool = True,
 ) -> PublicTranscriptionJobDetail:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         row = await repository.get_public(connection, job_id=job_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Public transcription job not found")
@@ -79,7 +79,7 @@ async def export_public_job(
     database: DatabaseDependency,
 ) -> Response:
     _validate_export_format(export_format)
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         row = await repository.get_public(connection, job_id=job_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Public transcription job not found")
@@ -102,7 +102,7 @@ async def update_job_visibility(
     account: JobWriter,
     database: DatabaseDependency,
 ) -> TranscriptionJobResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.update_visibility(
             connection,
             tenant_id=account.tenant_id,
@@ -121,7 +121,7 @@ async def job_detail(
     database: DatabaseDependency,
     include_segments: bool = True,
 ) -> TranscriptionJobDetail:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.get_for_tenant(
             connection, tenant_id=account.tenant_id, job_id=job_id
         )
@@ -161,7 +161,7 @@ def _dialogue_html(title: str, transcript: str) -> str:
             speaker, text, side = "转写", stripped, "left"
         messages.append(
             f'<article class="message {side}"><div class="speaker">'
-            f"{html.escape(speaker)}</div><div class=\"bubble\">"
+            f'{html.escape(speaker)}</div><div class="bubble">'
             f"{html.escape(text)}</div></article>"
         )
     safe_title = html.escape(title)
@@ -219,7 +219,7 @@ async def export_job(
     database: DatabaseDependency,
 ) -> Response:
     _validate_export_format(export_format)
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.get_for_tenant(
             connection, tenant_id=account.tenant_id, job_id=job_id
         )
@@ -298,7 +298,7 @@ async def cancel_job(
     account: JobWriter,
     database: DatabaseDependency,
 ) -> TranscriptionJobResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.request_cancel(
             connection, tenant_id=account.tenant_id, job_id=job_id
         )
@@ -313,10 +313,8 @@ async def retry_job(
     account: JobWriter,
     database: DatabaseDependency,
 ) -> TranscriptionJobResponse:
-    async with database.connection() as connection:
-        row = await repository.retry(
-            connection, tenant_id=account.tenant_id, job_id=job_id
-        )
+    async with database.tenant_connection(account.tenant_id) as connection:
+        row = await repository.retry(connection, tenant_id=account.tenant_id, job_id=job_id)
     if row is None:
         raise HTTPException(status_code=409, detail="Job cannot be retried")
     return TranscriptionJobResponse.model_validate(row)
@@ -330,7 +328,7 @@ async def delete_job(
     settings: SettingsDependency,
 ) -> TranscriptionJobDeleteResponse:
     file_result = None
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.delete_for_tenant(
             connection, tenant_id=account.tenant_id, job_id=job_id
         )
@@ -346,13 +344,14 @@ async def delete_job(
                 connection,
                 tenant_id=account.tenant_id,
                 file_id=row["uploaded_file_id"],
+                deletion_reason="job_delete",
             )
     if file_result is not None and not file_result["blocked"]:
-        delete_uploaded_file_storage(
+        await process_pending_storage_deletions(
+            database,
             data_path=settings.data_path,
-            tenant_id=account.tenant_id,
-            root_file_id=file_result["root_file_id"],
-            exact_storage_path=file_result["exact_storage_path"],
+            limit=1,
+            deletion_ids=[int(file_result["deletion_id"])],
         )
     deleted_files = 0 if file_result is None else int(file_result["deleted_files"])
     return TranscriptionJobDeleteResponse(
@@ -375,7 +374,7 @@ async def create_jobs(
 ) -> list[TranscriptionJobResponse]:
     if len(payload.uploaded_file_ids) != len(set(payload.uploaded_file_ids)):
         raise HTTPException(status_code=422, detail="uploaded_file_ids must be unique")
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         rows = await repository.create_many(
             connection,
             tenant_id=account.tenant_id,

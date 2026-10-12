@@ -147,3 +147,12 @@ temp/
 ._*
 Thumbs.db
 Desktop.ini
+
+# AWR local runtime state
+.awr/state.db
+.awr/state.db-*
+.awr/artifacts/
+.awr/mutations/
+.awr/cache/
+.awr/clients/
+.awr/executions/

@@ -21,7 +21,7 @@ async def workspace_summary(
     account: WorkspaceReader,
     database: DatabaseDependency,
 ) -> WorkspaceSummary:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await (
             await connection.execute(
                 """

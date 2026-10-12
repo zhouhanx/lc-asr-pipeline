@@ -56,9 +56,10 @@ class OpenAICompatibleASRProvider:
         )
 
     def invoke(self, request: TranscriptionRequest) -> TranscriptionResult:
-        with request.audio_path.open("rb") as audio, httpx.Client(
-            timeout=self.timeout, transport=self.transport
-        ) as client:
+        with (
+            request.audio_path.open("rb") as audio,
+            httpx.Client(timeout=self.timeout, transport=self.transport) as client,
+        ):
             response = client.post(
                 self.endpoint("/v1/audio/transcriptions"),
                 headers={"Authorization": f"Bearer {self.api_key}"},

@@ -41,7 +41,7 @@ async def list_models(
     account: ModelReader,
     database: DatabaseDependency,
 ) -> list[ModelProviderResponse]:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         rows = await repository.list_for_tenant(connection, account.tenant_id)
     return [ModelProviderResponse.model_validate(row) for row in rows]
 
@@ -57,7 +57,7 @@ async def create_model(
         validate_provider_url(str(payload.base_url))
     except UnsafeProviderURL as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.create(
             connection,
             tenant_id=account.tenant_id,
@@ -103,7 +103,7 @@ async def update_model(
         if payload.api_key is not None and payload.api_key.get_secret_value()
         else None
     )
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         row = await repository.update(
             connection,
             tenant_id=account.tenant_id,
@@ -124,7 +124,7 @@ async def delete_model(
     account: ModelWriter,
     database: DatabaseDependency,
 ) -> None:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         result = await repository.delete(
             connection,
             tenant_id=account.tenant_id,
@@ -141,7 +141,7 @@ async def test_model(
     database: DatabaseDependency,
     settings: SettingsDependency,
 ) -> ModelProviderHealthResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         provider = await repository.get_for_tenant(
             connection,
             tenant_id=account.tenant_id,
@@ -228,7 +228,7 @@ async def set_default_model(
     account: ModelWriter,
     database: DatabaseDependency,
 ) -> ModelProviderResponse:
-    async with database.connection() as connection:
+    async with database.tenant_connection(account.tenant_id) as connection:
         provider = await repository.set_default(
             connection,
             tenant_id=account.tenant_id,

@@ -39,9 +39,7 @@ async def test_paddleocr_provider_submits_polls_and_parses_markdown(
                             "extractedPages": 1,
                         },
                         "resultUrl": {
-                            "jsonUrl": (
-                                "https://paddleocr-store-9.bj.bcebos.com/result.jsonl"
-                            )
+                            "jsonUrl": ("https://paddleocr-store-9.bj.bcebos.com/result.jsonl")
                         },
                     }
                 },
@@ -70,15 +68,9 @@ async def test_paddleocr_provider_submits_polls_and_parses_markdown(
 
 
 def test_paddleocr_result_host_pattern_accepts_only_official_shards() -> None:
-    assert paddleocr.PADDLEOCR_RESULT_HOST_PATTERN.fullmatch(
-        "paddleocr-store.bj.bcebos.com"
-    )
-    assert paddleocr.PADDLEOCR_RESULT_HOST_PATTERN.fullmatch(
-        "paddleocr-store-9.bj.bcebos.com"
-    )
+    assert paddleocr.PADDLEOCR_RESULT_HOST_PATTERN.fullmatch("paddleocr-store.bj.bcebos.com")
+    assert paddleocr.PADDLEOCR_RESULT_HOST_PATTERN.fullmatch("paddleocr-store-9.bj.bcebos.com")
     assert not paddleocr.PADDLEOCR_RESULT_HOST_PATTERN.fullmatch(
         "paddleocr-store-9.bj.bcebos.com.attacker.example"
     )
-    assert not paddleocr.PADDLEOCR_RESULT_HOST_PATTERN.fullmatch(
-        "other-store.bj.bcebos.com"
-    )
+    assert not paddleocr.PADDLEOCR_RESULT_HOST_PATTERN.fullmatch("other-store.bj.bcebos.com")

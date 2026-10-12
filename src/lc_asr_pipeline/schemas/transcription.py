@@ -32,4 +32,3 @@ class TranscriptionResult(BaseModel):
     speaker_segments: list[TranscriptSegment] = Field(default_factory=list)
     provider: str
     model: str
-

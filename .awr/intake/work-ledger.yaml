@@ -1,0 +1,121 @@
+goals:
+  - id: platform
+    title: 交付可验证的多租户语音转写、OCR 与简历平台
+    status: active
+    priority: P0
+    summary: >
+      用户于 2026-10-12 要求使用 AWR 与 RTK 接管并分析当前项目。
+      产品目标来自 llm-repo/wiki/lc-asr-pipeline-status.md（2026-07-24）：
+      维持多租户转写、OCR、简历项目和简历撰写平台，并保留已验证的安全边界。
+      本目标由交接文档和本次用户指令支持，不表示生产发布已验收。
+    success_criteria:
+      - 交接文档、未提交代码和运行状态被核对，不确定项保持显式。
+      - 后续实现只从已确认目标和验收出发，不把占位页面或过期阶段勾选当成完成。
+      - 凭据文件和环境赋值不进入 AWR 来源。
+
+work_items:
+  - id: TAKEOVER-001
+    title: 用 AWR 接管并记录当前项目分析
+    kind: intake
+    status: completed
+    goal: platform
+    required: true
+    priority: P0
+    owner: codex-cli
+    acceptance:
+      - AWR 使用已复查的显式源映射初始化，且未登记凭据文件。
+      - 检查点写明当前目标、已完成范围、未提交差异、运行状态、风险和下一动作。
+      - 2026-07-24 的历史测试结果不被重述为本次新的通过证据。
+    depends_on: []
+    paths:
+      - llm-repo/wiki/lc-asr-pipeline-status.md
+      - llm-repo/output/session-archive-2026-07-24-closeout.md
+      - .awr/intake/work-ledger.yaml
+    next_action: 已完成接管；后续以 VERIFY-001 和 COMMIT-001 为准。
+    summary: >
+      2026-10-12 接管完成。AWR 0.5.0 使用显式源映射。HEAD 曾为 main 94b954d。
+      PostgreSQL 17.10 已连通，迁移 0001 至 0023 已应用。历史门禁不是本次证据。
+
+  - id: VERIFY-001
+    title: 不含本地模型的完整性测试与 POC
+    status: completed
+    goal: platform
+    required: true
+    priority: P0
+    owner: codex-cli
+    depends_on:
+      - TAKEOVER-001
+    acceptance:
+      - 不启动、不调用本地 MLX 或 pyannote 模型服务。
+      - Python 与前端测试、类型检查、构建和数据库就绪检查通过。
+      - 运行中的 API 健康检查和管理员登录 POC 不依赖本地模型，临时账号已删除。
+    next_action: 结果已用于 COMMIT-001，不再重复执行。
+    summary: >
+      2026-10-12 验证：排除 tests/test_model_service_assets.py 后 73 个 pytest 通过；
+      Ruff、严格 Mypy（74 个源码文件）、pip check、13 个 Vitest、ESLint 和生产构建通过。
+      迁移重复执行无待处理项。活体 /health/live 与 /health/ready 返回 200，
+      前端 200，8765 模型端口不可达。临时管理员登录后已删除。
+
+  - id: COMMIT-001
+    title: 提交并推送已验证版本到 zhouhanx/lc-asr-pipeline
+    status: in_progress
+    goal: platform
+    required: true
+    priority: P0
+    owner: codex-cli
+    depends_on:
+      - VERIFY-001
+    acceptance:
+      - 提交前重新执行完整测试、类型、构建和敏感信息扫描。
+      - 提交范围与交接文档一致，不包含环境文件、模型权重或私人简历内容。
+      - 远端为 zhouhanx/lc-asr-pipeline，作者身份为 zhouhanx。
+    next_action: 完成敏感信息扫描后提交并推送；SSH 不可用时使用 HTTPS。
+    summary: >
+      用户已明确要求在无本地模型验证通过后提交并推送。
+      目标仓库为 git@github.com:zhouhanx/lc-asr-pipeline.git
+      与 https://github.com/zhouhanx/lc-asr-pipeline.git。
+
+  - id: OCR-BENCH-001
+    title: 用去标识化样本比较两条本地 OCR 路线
+    status: planned
+    goal: platform
+    required: false
+    priority: P1
+    depends_on:
+      - COMMIT-001
+    acceptance:
+      - 样本经过去标识化，且不进入源码、日志或 AWR 来源。
+      - 比较完整解析流水线，而不是只比较单个视觉组件。
+      - 比较完成前不采购、不微调。
+    next_action: 先确认提交边界，再设计基准；本轮不执行。
+    summary: >
+      来源为 llm-repo/wiki/local-ocr-selection.md 与 2026-07-24 状态页。
+      候选是 PaddleOCR-VL-1.6 与 GLM-OCR，PP-StructureV3/Docling 作为回退。
+
+  - id: OPS-001
+    title: 补齐备份、轮换、配额和灾备文档
+    status: planned
+    goal: platform
+    required: false
+    priority: P2
+    depends_on:
+      - COMMIT-001
+    acceptance:
+      - 备份恢复、密钥轮换、全局配额和常规限流有可执行方案。
+      - 方案不记录真实凭据。
+    next_action: 保持为计划项，等待部署决策。
+    summary: Phase 12 的六项实施已在交接文档中记录完成；这些剩余运维项未纳入那次交付。
+
+  - id: TENANT-ADMIN-001
+    title: 补齐租户内成员、角色和邮箱验证
+    status: planned
+    goal: platform
+    required: false
+    priority: P2
+    depends_on:
+      - COMMIT-001
+    acceptance:
+      - 替换占位的 Members、Roles、Settings，而不是把占位页记为完成。
+      - 邮箱验证依赖已决定的邮件提供商。
+    next_action: 保持为计划项；平台级开户已经独立实现。
+    summary: 根目录 AGENTS.md 的旧恢复顺序仍提到此项，但 2026-07-24 状态页把 OCR 基准放在更前。

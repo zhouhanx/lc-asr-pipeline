@@ -149,7 +149,6 @@ class ResumeProjectRepository:
             JOIN uploaded_files file ON file.id = project.uploaded_file_id
             WHERE project.tenant_id = %s
             ORDER BY profile.extracted_at DESC, project.project_index
-            LIMIT 1000
             """,
             (tenant_id,),
         )

@@ -142,33 +142,36 @@ class IdentityRepository:
 
         await connection.execute(
             """
-            INSERT INTO role_permissions (role_id, permission_id)
-            SELECT %s, id FROM permissions
+            INSERT INTO role_permissions (tenant_id, role_id, permission_id)
+            SELECT %s, %s, id FROM permissions
             """,
-            (roles["owner"],),
+            (tenant["id"], roles["owner"]),
         )
         await connection.execute(
             """
-            INSERT INTO role_permissions (role_id, permission_id)
-            SELECT %s, id FROM permissions
+            INSERT INTO role_permissions (tenant_id, role_id, permission_id)
+            SELECT %s, %s, id FROM permissions
             WHERE code NOT IN ('tenant:manage', 'roles:manage')
             """,
-            (roles["admin"],),
+            (tenant["id"], roles["admin"]),
         )
         await connection.execute(
             """
-            INSERT INTO role_permissions (role_id, permission_id)
-            SELECT %s, id FROM permissions
+            INSERT INTO role_permissions (tenant_id, role_id, permission_id)
+            SELECT %s, %s, id FROM permissions
             WHERE code IN (
                 'workspace:read', 'jobs:read', 'models:read', 'agents:read',
                 'members:read', 'roles:read', 'tenant:read'
             )
             """,
-            (roles["member"],),
+            (tenant["id"], roles["member"]),
         )
         await connection.execute(
-            "INSERT INTO membership_roles (membership_id, role_id) VALUES (%s, %s)",
-            (membership["id"], roles["owner"]),
+            """
+            INSERT INTO membership_roles (tenant_id, membership_id, role_id)
+            VALUES (%s, %s, %s)
+            """,
+            (tenant["id"], membership["id"], roles["owner"]),
         )
         await connection.execute(
             """

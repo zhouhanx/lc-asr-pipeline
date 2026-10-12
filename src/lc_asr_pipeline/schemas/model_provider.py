@@ -9,17 +9,13 @@ from uuid import UUID
 from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
 
 ModelKind = Literal["speech", "text", "ocr"]
-ProviderType = Literal[
-    "local", "openai_compatible", "stepfun", "deepseek", "paddleocr"
-]
+ProviderType = Literal["local", "openai_compatible", "stepfun", "deepseek", "paddleocr"]
 
 
 class ModelProviderCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     model_kind: ModelKind
-    provider_type: Literal[
-        "openai_compatible", "stepfun", "deepseek", "paddleocr"
-    ]
+    provider_type: Literal["openai_compatible", "stepfun", "deepseek", "paddleocr"]
     base_url: HttpUrl
     model_name: str = Field(min_length=1, max_length=160)
     api_key: SecretStr = Field(min_length=1, max_length=4096)
@@ -32,9 +28,7 @@ class ModelProviderCreate(BaseModel):
             "ocr": {"paddleocr"},
         }
         if self.provider_type not in allowed[self.model_kind]:
-            raise ValueError(
-                f"{self.provider_type} is not valid for {self.model_kind} models"
-            )
+            raise ValueError(f"{self.provider_type} is not valid for {self.model_kind} models")
         return self
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 import string
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from anyio import to_thread
@@ -13,6 +13,7 @@ from psycopg.errors import UniqueViolation
 
 from lc_asr_pipeline.core.config import Settings
 from lc_asr_pipeline.core.security import (
+    admin_login_fingerprint,
     create_platform_admin_token,
     hash_password,
     validate_password_policy,
@@ -25,6 +26,12 @@ from lc_asr_pipeline.repositories.identity import IdentityRepository
 
 class InvalidAdminCredentialsError(ValueError):
     pass
+
+
+class AdminLoginBlockedError(ValueError):
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("Administrator login temporarily unavailable")
+        self.retry_after_seconds = retry_after_seconds
 
 
 class DuplicateProvisioningError(ValueError):
@@ -48,21 +55,93 @@ class AdminService:
         self._settings = settings
         self._repository = AdminRepository()
 
-    async def login(self, username: str, password: str) -> AdminAuthResult:
+    async def login(
+        self,
+        username: str,
+        password: str,
+        *,
+        source_identifier: str,
+    ) -> AdminAuthResult:
         normalized_username = username.strip().casefold()
-        async with self._database.connection() as connection:
-            admin = await self._repository.find_by_username(connection, normalized_username)
+        source_fingerprint = admin_login_fingerprint(
+            f"source:{source_identifier}",
+            self._settings,
+        )
+        identity_source_fingerprint = admin_login_fingerprint(
+            f"identity_source:{normalized_username}:{source_identifier}",
+            self._settings,
+        )
+        async with self._database.system_connection() as connection:
+            source_retry = await self._repository.consume_login_limit(
+                connection,
+                scope="source",
+                key_hash=source_fingerprint,
+                max_attempts=self._settings.admin_login_source_max_attempts,
+                window_seconds=self._settings.admin_login_window_seconds,
+                block_seconds=self._settings.admin_login_lock_seconds,
+            )
+            identity_retry = await self._repository.consume_login_limit(
+                connection,
+                scope="identity_source",
+                key_hash=identity_source_fingerprint,
+                max_attempts=self._settings.admin_login_identity_source_max_attempts,
+                window_seconds=self._settings.admin_login_window_seconds,
+                block_seconds=self._settings.admin_login_lock_seconds,
+            )
+            retry_after = max(source_retry or 0, identity_retry or 0)
+            admin = (
+                None
+                if retry_after
+                else await self._repository.find_by_username(
+                    connection,
+                    normalized_username,
+                )
+            )
+        if retry_after:
+            raise AdminLoginBlockedError(retry_after)
+        if (
+            admin is not None
+            and admin.locked_until is not None
+            and admin.locked_until > datetime.now(timezone.utc)
+        ):
+            raise AdminLoginBlockedError(
+                max(
+                    1,
+                    int((admin.locked_until - datetime.now(timezone.utc)).total_seconds()),
+                )
+            )
         digest = admin.password_hash if admin else None
         valid = await to_thread.run_sync(verify_password, password, digest)
         if admin is None or not valid:
+            if admin is not None:
+                async with self._database.system_connection() as connection:
+                    failure_retry = await self._repository.record_failed_login(
+                        connection,
+                        admin_id=admin.id,
+                        max_failures=self._settings.admin_login_account_max_failures,
+                        window_seconds=self._settings.admin_login_window_seconds,
+                        lock_seconds=self._settings.admin_login_lock_seconds,
+                    )
+                if failure_retry:
+                    raise AdminLoginBlockedError(failure_retry)
             raise InvalidAdminCredentialsError("Invalid administrator credentials")
+        async with self._database.system_connection() as connection:
+            success_retry = await self._repository.record_successful_login(
+                connection,
+                admin.id,
+            )
+            if success_retry:
+                raise AdminLoginBlockedError(success_retry)
+            await self._repository.clear_login_limit(
+                connection,
+                scope="identity_source",
+                key_hash=identity_source_fingerprint,
+            )
         token, expires_at = create_platform_admin_token(
             settings=self._settings,
             admin_id=admin.id,
             password_change_only=admin.must_change_password,
         )
-        async with self._database.connection() as connection:
-            await self._repository.record_login(connection, admin.id)
         return AdminAuthResult(admin=admin, access_token=token, expires_at=expires_at)
 
     async def change_initial_password(
@@ -70,13 +149,13 @@ class AdminService:
         admin_id: UUID,
         new_password: str,
     ) -> bool:
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             admin = await self._repository.find_active_by_id(connection, admin_id)
         if admin is None:
             return False
         validate_password_policy(new_password, admin.username)
         digest = await to_thread.run_sync(hash_password, new_password)
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             return await self._repository.change_password(
                 connection,
                 admin_id=admin_id,
@@ -99,7 +178,7 @@ class AdminService:
             raise InvalidAdminCurrentPasswordError("Current password is incorrect")
         validate_password_policy(new_password, admin.username)
         digest = await to_thread.run_sync(hash_password, new_password)
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             return await self._repository.replace_current_password(
                 connection,
                 admin_id=admin.id,
@@ -118,7 +197,7 @@ class AdminService:
         digest = await to_thread.run_sync(hash_password, initial_password)
         normalized_email = owner_email.strip().casefold()
         try:
-            async with self._database.connection() as connection:
+            async with self._database.system_connection() as connection:
                 account = await IdentityRepository().register_tenant_owner(
                     connection,
                     tenant_slug=tenant_slug,
@@ -146,7 +225,7 @@ class AdminService:
         initial_password = _initial_password()
         digest = await to_thread.run_sync(hash_password, initial_password)
         try:
-            async with self._database.connection() as connection:
+            async with self._database.system_connection() as connection:
                 user = await self._repository.add_tenant_user(
                     connection,
                     tenant_id=tenant_id,
@@ -166,7 +245,7 @@ class AdminService:
     ) -> tuple[dict[str, object] | None, str]:
         initial_password = _initial_password()
         digest = await to_thread.run_sync(hash_password, initial_password)
-        async with self._database.connection() as connection:
+        async with self._database.system_connection() as connection:
             user = await self._repository.reset_user_password(
                 connection,
                 user_id=user_id,

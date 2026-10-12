@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from lc_asr_pipeline.api.admin_security import (
     CurrentPlatformAdmin,
@@ -43,6 +43,7 @@ from lc_asr_pipeline.schemas.admin import (
 from lc_asr_pipeline.schemas.job import TranscriptionJobVisibilityUpdate
 from lc_asr_pipeline.schemas.model_provider import ModelProviderResponse
 from lc_asr_pipeline.services.admin import (
+    AdminLoginBlockedError,
     AdminService,
     DuplicateProvisioningError,
     InvalidAdminCredentialsError,
@@ -57,14 +58,23 @@ job_repository = JobRepository()
 @router.post("/auth/login", response_model=PlatformAdminAuthResponse)
 async def admin_login(
     payload: PlatformAdminLoginRequest,
+    request: Request,
     database: DatabaseDependency,
     settings: SettingsDependency,
 ) -> PlatformAdminAuthResponse:
+    source_identifier = request.client.host if request.client else "unknown"
     try:
         result = await AdminService(database, settings).login(
             payload.username,
             payload.password,
+            source_identifier=source_identifier,
         )
+    except AdminLoginBlockedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Administrator login temporarily unavailable",
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
     except InvalidAdminCredentialsError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -122,7 +132,7 @@ async def list_admin_tenants(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> list[AdminTenantResponse]:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         tenants = await repository.list_tenants(connection)
         users = await repository.list_users(connection)
     return _tenant_responses(tenants, users)
@@ -148,14 +158,12 @@ async def create_admin_tenant(
         )
     except DuplicateProvisioningError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         tenants = await repository.list_tenants(connection)
         users = await repository.list_users(connection, created["tenant_id"])  # type: ignore[arg-type]
     tenant = next(item for item in tenants if item["id"] == created["tenant_id"])
     tenant_response = _tenant_responses([tenant], users)[0]
-    user_response = next(
-        user for user in tenant_response.users if user.id == created["user_id"]
-    )
+    user_response = next(user for user in tenant_response.users if user.id == created["user_id"])
     return AdminProvisionedAccountResponse(
         tenant=tenant_response,
         user=user_response,
@@ -199,7 +207,7 @@ async def update_admin_tenant(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> AdminTenantResponse:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         tenant = await repository.update_tenant_status(
             connection,
             tenant_id=tenant_id,
@@ -217,7 +225,7 @@ async def delete_admin_tenant(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> AdminTenantDeleteResponse:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         result = await repository.business_delete_tenant(
             connection,
             tenant_id=tenant_id,
@@ -244,7 +252,7 @@ async def update_admin_user(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> AdminUserResponse:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         user = await repository.update_user_status(
             connection,
             user_id=user_id,
@@ -282,7 +290,7 @@ async def list_admin_jobs(
     database: DatabaseDependency,
     tenant_id: UUID | None = None,
 ) -> list[AdminJobResponse]:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         jobs = await repository.list_jobs(connection, tenant_id)
     return [AdminJobResponse.model_validate(job) for job in jobs]
 
@@ -293,7 +301,7 @@ async def get_admin_job(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> AdminJobDetail:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         job = await repository.get_job(connection, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Transcription job not found")
@@ -308,7 +316,7 @@ async def update_admin_job_visibility(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> AdminJobResponse:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         job = await repository.update_job_visibility(
             connection,
             job_id=job_id,
@@ -325,7 +333,7 @@ async def retry_admin_job(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> AdminJobResponse:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         current = await repository.get_job(connection, job_id)
         if current is None:
             raise HTTPException(status_code=404, detail="Transcription job not found")
@@ -348,7 +356,7 @@ async def export_admin_job(
     database: DatabaseDependency,
 ) -> Response:
     _validate_export_format(export_format)
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         job = await repository.get_job(connection, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Transcription job not found")
@@ -369,7 +377,7 @@ async def list_admin_recordings(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> list[AdminRecordingResponse]:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         recordings = await repository.list_recordings(connection)
     return [AdminRecordingResponse.model_validate(item) for item in recordings]
 
@@ -383,7 +391,7 @@ async def list_admin_recording_models(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> AdminRecordingModelsResponse:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         recording = await repository.get_recording(connection, recording_id)
         if recording is None:
             raise HTTPException(status_code=404, detail="Recording not found")
@@ -408,7 +416,7 @@ async def create_admin_recording_job(
     _: CurrentPlatformAdmin,
     database: DatabaseDependency,
 ) -> AdminJobResponse:
-    async with database.connection() as connection:
+    async with database.system_connection() as connection:
         context = await repository.recording_job_context(
             connection,
             recording_id=recording_id,

@@ -19,9 +19,7 @@ from lc_asr_pipeline.services.network_policy import (
 )
 
 ProgressCallback = Callable[[int, int], Awaitable[None]]
-PADDLEOCR_RESULT_HOST_PATTERN = re.compile(
-    r"^paddleocr-store(?:-\d+)?\.bj\.bcebos\.com$"
-)
+PADDLEOCR_RESULT_HOST_PATTERN = re.compile(r"^paddleocr-store(?:-\d+)?\.bj\.bcebos\.com$")
 
 
 class PaddleOCRProviderError(RuntimeError):

@@ -42,6 +42,11 @@ CREATE TABLE platform_admins (
         CHECK (status IN ('active', 'disabled')),
     must_change_password boolean NOT NULL DEFAULT true,
     last_login_at timestamptz,
+    failed_login_attempts integer NOT NULL DEFAULT 0
+        CHECK (failed_login_attempts >= 0),
+    failed_login_window_started_at timestamptz,
+    last_failed_login_at timestamptz,
+    locked_until timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT platform_admins_username_lowercase CHECK (username = lower(username)),
@@ -56,6 +61,7 @@ CREATE TABLE memberships (
         CHECK (status IN ('active', 'invited', 'suspended')),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (id, tenant_id),
     UNIQUE (tenant_id, user_id)
 );
 
@@ -66,6 +72,7 @@ CREATE TABLE roles (
     name varchar(120) NOT NULL,
     is_system boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (id, tenant_id),
     UNIQUE (tenant_id, code)
 );
 
@@ -78,12 +85,20 @@ CREATE TABLE permissions (
 CREATE TABLE role_permissions (
     role_id uuid NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
     permission_id uuid NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+    tenant_id uuid NOT NULL,
+    FOREIGN KEY (role_id, tenant_id)
+        REFERENCES roles(id, tenant_id) ON DELETE CASCADE,
     PRIMARY KEY (role_id, permission_id)
 );
 
 CREATE TABLE membership_roles (
     membership_id uuid NOT NULL REFERENCES memberships(id) ON DELETE CASCADE,
     role_id uuid NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    tenant_id uuid NOT NULL,
+    FOREIGN KEY (membership_id, tenant_id)
+        REFERENCES memberships(id, tenant_id) ON DELETE CASCADE,
+    FOREIGN KEY (role_id, tenant_id)
+        REFERENCES roles(id, tenant_id) ON DELETE CASCADE,
     PRIMARY KEY (membership_id, role_id)
 );
 
@@ -202,17 +217,21 @@ CREATE TABLE uploaded_files (
         CHECK (status IN ('uploading', 'uploaded', 'extracting', 'ready', 'failed', 'cancelled')),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (id, tenant_id),
     UNIQUE (batch_id, relative_path)
 );
 
 CREATE TABLE upload_chunks (
     file_id uuid NOT NULL REFERENCES uploaded_files(id) ON DELETE CASCADE,
+    tenant_id uuid NOT NULL,
     chunk_index integer NOT NULL CHECK (chunk_index >= 0),
     offset_bytes bigint NOT NULL CHECK (offset_bytes >= 0),
     size_bytes integer NOT NULL CHECK (size_bytes > 0),
     sha256 char(64) NOT NULL,
     storage_path text NOT NULL,
     received_at timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (file_id, tenant_id)
+        REFERENCES uploaded_files(id, tenant_id) ON DELETE CASCADE,
     PRIMARY KEY (file_id, chunk_index)
 );
 
@@ -435,6 +454,40 @@ CREATE TABLE resume_projects (
         UNIQUE (resume_profile_id, project_index)
 );
 
+CREATE TABLE resume_documents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    created_by uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    source_resume_profile_id uuid
+        REFERENCES resume_profiles(id) ON DELETE CASCADE,
+    title varchar(300) NOT NULL,
+    template_key varchar(32) NOT NULL DEFAULT 'local-template-05'
+        CHECK (template_key IN (
+            'local-template-01', 'local-template-02', 'local-template-03',
+            'local-template-04', 'local-template-05'
+        )),
+    theme_color varchar(7) NOT NULL DEFAULT '#465A73'
+        CHECK (theme_color ~ '^#[0-9A-Fa-f]{6}$'),
+    content jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(content) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (id, tenant_id)
+);
+
+CREATE TABLE resume_document_photos (
+    resume_document_id uuid PRIMARY KEY
+        REFERENCES resume_documents(id) ON DELETE CASCADE,
+    tenant_id uuid NOT NULL,
+    media_type varchar(32) NOT NULL
+        CHECK (media_type IN ('image/jpeg', 'image/png', 'image/webp')),
+    image_bytes bytea NOT NULL
+        CHECK (octet_length(image_bytes) BETWEEN 1 AND 5242880),
+    FOREIGN KEY (resume_document_id, tenant_id)
+        REFERENCES resume_documents(id, tenant_id) ON DELETE CASCADE,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE transcripts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -445,18 +498,51 @@ CREATE TABLE transcripts (
     text text NOT NULL,
     duration_seconds numeric(14,3),
     raw_result jsonb NOT NULL DEFAULT '{}'::jsonb,
-    created_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (id, tenant_id)
 );
 
 CREATE TABLE transcript_segments (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     transcript_id uuid NOT NULL REFERENCES transcripts(id) ON DELETE CASCADE,
+    tenant_id uuid NOT NULL,
     segment_index integer NOT NULL CHECK (segment_index >= 0),
     start_seconds numeric(14,3) NOT NULL CHECK (start_seconds >= 0),
     end_seconds numeric(14,3) NOT NULL CHECK (end_seconds >= start_seconds),
     speaker varchar(80),
     text text NOT NULL,
+    FOREIGN KEY (transcript_id, tenant_id)
+        REFERENCES transcripts(id, tenant_id) ON DELETE CASCADE,
     UNIQUE (transcript_id, segment_index)
+);
+
+CREATE TABLE platform_admin_login_limits (
+    scope varchar(24) NOT NULL
+        CHECK (scope IN ('source', 'identity_source')),
+    key_hash char(64) NOT NULL,
+    window_started_at timestamptz NOT NULL DEFAULT now(),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    blocked_until timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (scope, key_hash)
+);
+
+CREATE TABLE storage_deletion_queue (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    tenant_id uuid NOT NULL,
+    root_file_id uuid,
+    exact_storage_path text,
+    reason varchar(32) NOT NULL
+        CHECK (reason IN (
+            'history_delete', 'job_delete', 'batch_cancel',
+            'expired_upload', 'orphan_scan'
+        )),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    last_error_type varchar(160),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz,
+    CHECK (root_file_id IS NOT NULL OR exact_storage_path IS NOT NULL)
 );
 
 CREATE INDEX model_providers_tenant_idx ON model_providers(tenant_id, is_enabled);
@@ -490,3 +576,62 @@ CREATE INDEX resume_projects_company_idx
     WHERE company_name IS NOT NULL;
 CREATE INDEX resume_projects_source_idx
     ON resume_projects(tenant_id, uploaded_file_id, ocr_job_id);
+CREATE UNIQUE INDEX resume_documents_source_key
+    ON resume_documents(tenant_id, source_resume_profile_id)
+    WHERE source_resume_profile_id IS NOT NULL;
+CREATE INDEX resume_documents_tenant_time_idx
+    ON resume_documents(tenant_id, updated_at DESC);
+CREATE INDEX platform_admins_locked_until_idx
+    ON platform_admins(locked_until) WHERE locked_until IS NOT NULL;
+CREATE INDEX platform_admin_login_limits_cleanup_idx
+    ON platform_admin_login_limits(updated_at, blocked_until);
+CREATE INDEX role_permissions_tenant_idx ON role_permissions(tenant_id);
+CREATE INDEX membership_roles_tenant_idx ON membership_roles(tenant_id);
+CREATE INDEX upload_chunks_tenant_idx ON upload_chunks(tenant_id);
+CREATE INDEX transcript_segments_tenant_idx ON transcript_segments(tenant_id);
+CREATE INDEX resume_document_photos_tenant_idx
+    ON resume_document_photos(tenant_id);
+CREATE INDEX storage_deletion_queue_pending_idx
+    ON storage_deletion_queue(next_attempt_at, id)
+    WHERE completed_at IS NULL;
+CREATE INDEX storage_deletion_queue_tenant_idx
+    ON storage_deletion_queue(tenant_id, created_at DESC);
+
+-- The runtime role is deliberately unable to bypass RLS. Application transactions
+-- use SET LOCAL ROLE plus a transaction-local app.tenant_id; background/platform
+-- transactions explicitly use the system role.
+CREATE ROLE lc_asr_app_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOINHERIT NOBYPASSRLS;
+CREATE ROLE lc_asr_app_system NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+    NOINHERIT NOBYPASSRLS;
+
+DO $$
+DECLARE
+    table_name text;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY[
+        'memberships', 'roles', 'role_permissions', 'membership_roles',
+        'refresh_sessions', 'audit_events', 'model_providers',
+        'upload_batches', 'uploaded_files', 'upload_chunks',
+        'transcription_jobs', 'transcripts', 'transcript_segments',
+        'ocr_jobs', 'ocr_results', 'resume_profiles', 'resume_projects',
+        'resume_documents', 'resume_document_photos',
+        'storage_deletion_queue'
+    ]
+    LOOP
+        EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
+        EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', table_name);
+        EXECUTE format(
+            'CREATE POLICY tenant_isolation ON %I TO lc_asr_app_runtime '
+            'USING (tenant_id = NULLIF(current_setting(''app.tenant_id'', true), '''')::uuid) '
+            'WITH CHECK (tenant_id = NULLIF(current_setting(''app.tenant_id'', true), '''')::uuid)',
+            table_name
+        );
+        EXECUTE format(
+            'CREATE POLICY system_access ON %I TO lc_asr_app_system '
+            'USING (true) WITH CHECK (true)',
+            table_name
+        );
+    END LOOP;
+END
+$$;

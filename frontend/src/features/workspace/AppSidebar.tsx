@@ -99,7 +99,7 @@ export function AppSidebar({ session, activeItem, onSelect }: AppSidebarProps) {
                           </SidebarMenuItem>
                           {expanded && <div className="mt-2 grid gap-1 border-l-4 border-sidebar-border pl-3 group-data-[collapsible=icon]:hidden">{children.map((child) => {
                             const ChildIcon = child.icon
-                            return <SidebarMenuItem key={child.id}><SidebarMenuButton isActive={activeItem === child.id} aria-current={activeItem === child.id ? 'page' : undefined} className="font-mono text-xs" onClick={() => onSelect(child.id)}><ChildIcon /><span>{child.label}</span></SidebarMenuButton></SidebarMenuItem>
+                            return <SidebarMenuItem key={child.id}><SidebarMenuButton isActive={activeItem === child.id} aria-current={activeItem === child.id ? 'page' : undefined} className="font-mono text-xs" onClick={() => onSelect(child.id)}><ChildIcon /><span>{child.label}</span>{child.badge && <Badge className="ml-auto text-[8px]" variant="outline">{child.badge}</Badge>}</SidebarMenuButton></SidebarMenuItem>
                           })}</div>}
                         </div>
                       )

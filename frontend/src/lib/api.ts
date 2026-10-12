@@ -1,4 +1,6 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
+export const CSRF_COOKIE_NAME = import.meta.env.VITE_AUTH_CSRF_COOKIE_NAME ?? 'lc_asr_csrf'
+export const OPERATION_ID_HEADER = 'X-Operation-ID'
 
 export type User = {
   id: string
@@ -33,14 +35,42 @@ type AuthSessionListener = (payload: AuthPayload | null) => void
 let authSessionListener: AuthSessionListener | null = null
 let refreshInFlight: Promise<AuthPayload> | null = null
 
+export function csrfTokenFromCookie(cookieValue = document.cookie): string | null {
+  for (const part of cookieValue.split(';')) {
+    const [name, ...valueParts] = part.trim().split('=')
+    if (name === CSRF_COOKIE_NAME) return decodeURIComponent(valueParts.join('='))
+  }
+  return null
+}
+
+function addCsrfHeader(headers: Headers): void {
+  const csrfToken = csrfTokenFromCookie()
+  if (csrfToken) headers.set('X-CSRF-Token', csrfToken)
+}
+
 export class ApiError extends Error {
   readonly status: number
+  readonly operationId: string | null
 
-  constructor(status: number, message: string) {
-    super(message)
+  constructor(status: number, message: string, operationId: string | null = null) {
+    super(operationId ? `${message}（操作 ID：${operationId}）` : message)
     this.name = 'ApiError'
     this.status = status
+    this.operationId = operationId
   }
+}
+
+function operationIdFromResponse(response: Response): string | null {
+  const value = response.headers.get(OPERATION_ID_HEADER)?.trim()
+  return value || null
+}
+
+function apiError(response: Response, payload: unknown): ApiError {
+  return new ApiError(
+    response.status,
+    errorMessage(payload),
+    operationIdFromResponse(response),
+  )
 }
 
 function errorMessage(payload: unknown): string {
@@ -74,13 +104,16 @@ export function setAuthSessionListener(listener: AuthSessionListener | null): ()
 
 export function refreshAuthSession(): Promise<AuthPayload> {
   if (!refreshInFlight) {
+    const headers = new Headers()
+    addCsrfHeader(headers)
     refreshInFlight = fetch(`${API_BASE_URL}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
+      headers,
     })
       .then(async (response) => {
         const payload = await responsePayload(response)
-        if (!response.ok) throw new ApiError(response.status, errorMessage(payload))
+        if (!response.ok) throw apiError(response, payload)
         return payload as AuthPayload
       })
       .finally(() => {
@@ -123,6 +156,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const { body, token, ...requestInit } = options
   const headers = new Headers(options.headers)
   if (body !== undefined) headers.set('Content-Type', 'application/json')
+  if (path === '/auth/logout' && options.method === 'POST') addCsrfHeader(headers)
 
   const response = await fetchWithAuthRetry(path, {
     ...requestInit,
@@ -131,7 +165,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }, token)
 
   const payload = await responsePayload(response)
-  if (!response.ok) throw new ApiError(response.status, errorMessage(payload))
+  if (!response.ok) throw apiError(response, payload)
   return payload as T
 }
 
@@ -150,7 +184,7 @@ export async function apiBinaryRequest(
   }, token)
   if (!response.ok) {
     const payload = await responsePayload(response)
-    throw new ApiError(response.status, errorMessage(payload))
+    throw apiError(response, payload)
   }
 }
 
@@ -158,7 +192,7 @@ export async function apiDownload(path: string, token: string): Promise<Blob> {
   const response = await fetchWithAuthRetry(path, {}, token)
   if (!response.ok) {
     const payload = await responsePayload(response)
-    throw new ApiError(response.status, errorMessage(payload))
+    throw apiError(response, payload)
   }
   return response.blob()
 }
@@ -330,6 +364,96 @@ export type ResumeProjectSummary = {
   project_count: number
   candidate_count: number
   company_count: number
+}
+
+export type ResumeTemplateKey = string
+
+export type ResumeTemplateDefinition = {
+  key: ResumeTemplateKey
+  name: string
+  description: string
+  group: 'local'
+  layout: 'local_01' | 'local_02' | 'local_03' | 'local_04' | 'local_05'
+  header_style: 'banner' | 'centered' | 'topbar' | 'minimal' | 'resume_mark'
+  section_style: 'ribbon' | 'band' | 'underline' | 'line' | 'tracked_ribbon'
+  density: 'compact' | 'comfortable'
+  default_color: string
+  variant: number
+}
+
+export type ResumePersonalInfo = {
+  name: string
+  headline: string
+  phone: string
+  email: string
+  location: string
+  website: string
+  summary: string
+}
+
+export type ResumeEducationEntry = {
+  id: string
+  school: string
+  degree: string
+  major: string
+  start_date: string
+  end_date: string
+  description: string
+}
+
+export type ResumeWorkEntry = {
+  id: string
+  company: string
+  role: string
+  start_date: string
+  end_date: string
+  highlights: string[]
+}
+
+export type ResumeProjectEntry = {
+  id: string
+  source_project_id: string | null
+  name: string
+  company: string
+  role: string
+  start_date: string
+  end_date: string
+  summary: string
+  highlights: string[]
+  technologies: string[]
+}
+
+export type ResumeContent = {
+  personal: ResumePersonalInfo
+  education: ResumeEducationEntry[]
+  work: ResumeWorkEntry[]
+  projects: ResumeProjectEntry[]
+  skills: string[]
+  certificates: string[]
+  self_evaluation: string
+  source_markdown: string
+}
+
+export type ResumeSource = {
+  id: string
+  candidate_name: string
+  source_path: string
+  extracted_at: string
+  project_count: number
+  draft_id: string | null
+}
+
+export type ResumeDocument = {
+  id: string
+  source_resume_profile_id: string | null
+  source_path: string | null
+  title: string
+  template_key: ResumeTemplateKey
+  theme_color: string
+  content: ResumeContent
+  has_photo: boolean
+  created_at: string
+  updated_at: string
 }
 
 export type WorkspaceSummary = {

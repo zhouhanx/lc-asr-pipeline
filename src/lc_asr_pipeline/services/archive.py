@@ -13,7 +13,16 @@ from pathlib import Path, PurePosixPath
 from typing import IO
 
 AUDIO_SUFFIXES = {
-    ".aac", ".aiff", ".flac", ".m4a", ".mp3", ".mp4", ".ogg", ".opus", ".wav", ".webm"
+    ".aac",
+    ".aiff",
+    ".flac",
+    ".m4a",
+    ".mp3",
+    ".mp4",
+    ".ogg",
+    ".opus",
+    ".wav",
+    ".webm",
 }
 
 
@@ -119,9 +128,7 @@ def extract_audio_archive(
                         remaining_bytes=max_bytes - total,
                     )
                     total += size
-                    extracted.append(
-                        ExtractedAudio(normalized, target, size, checksum)
-                    )
+                    extracted.append(ExtractedAudio(normalized, target, size, checksum))
         if not extracted:
             raise ValueError("Archive contains no supported audio files")
         return extracted

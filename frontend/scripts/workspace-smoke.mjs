@@ -5,8 +5,18 @@ import path from 'node:path'
 import { chromium } from 'playwright-core'
 
 const appUrl = process.env.APP_URL ?? 'http://127.0.0.1:5173'
-const chromePath =
-  process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+const browserName = process.env.BROWSER_NAME ?? 'chrome'
+assert.ok(
+  ['chrome', 'edge'].includes(browserName),
+  'BROWSER_NAME must be chrome or edge',
+)
+const browserPath =
+  process.env.BROWSER_PATH ??
+  (browserName === 'edge'
+    ? process.env.EDGE_PATH ??
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
+    : process.env.CHROME_PATH ??
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
 const fixture = path.resolve('../data/fixtures/two-speaker-zh.wav')
 const screenshotDirectory = path.resolve('../data/test_results')
 const runId = Date.now().toString(36)
@@ -34,7 +44,7 @@ assert.ok(deepSeekKey, 'DeepSeek API key is required for browser smoke')
 
 await mkdir(screenshotDirectory, { recursive: true })
 
-const browser = await chromium.launch({ executablePath: chromePath, headless: true })
+const browser = await chromium.launch({ executablePath: browserPath, headless: true })
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } })
 const pageErrors = []
 let chunkUploads = 0

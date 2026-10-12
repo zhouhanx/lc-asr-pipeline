@@ -10,6 +10,7 @@ import { OCRSubmissionPanel } from '@/features/ocr/OCRSubmissionPanel'
 import { OCRTaskDetailPanel } from '@/features/ocr/OCRTaskDetailPanel'
 import { OCRTaskListPanel } from '@/features/ocr/OCRTaskListPanel'
 import { ResumeProjectPanel } from '@/features/projects/ResumeProjectPanel'
+import { ResumeWriterPanel } from '@/features/resume-writer/ResumeWriterPanel'
 import { FileHistoryPanel } from '@/features/transcription/FileHistoryPanel'
 import { PublicTaskPanel } from '@/features/transcription/PublicTaskPanel'
 import { SubmissionPanel } from '@/features/transcription/SubmissionPanel'
@@ -44,7 +45,8 @@ function AuthenticatedWorkspace({ session, onLogout }: AuthenticatedWorkspacePro
   const pathParts = location.pathname.split('/').filter(Boolean)
   const jobId = pathParts[1] === 'tasks' && pathParts[2] ? pathParts[2] : null
   const ocrJobId = pathParts[1] === 'ocr-tasks' && pathParts[2] ? pathParts[2] : null
-  const requestedItem = jobId ? 'tasks' : ocrJobId ? 'ocr-tasks' : (pathParts[1] ?? 'overview')
+  const resumeDocumentId = pathParts[1] === 'resume-writer' && pathParts[2] ? pathParts[2] : null
+  const requestedItem = jobId ? 'tasks' : ocrJobId ? 'ocr-tasks' : resumeDocumentId ? 'resume-writer' : (pathParts[1] ?? 'overview')
   const activeItem = allowedItems.some((item) => item.id === requestedItem)
     ? requestedItem
     : (allowedItems[0]?.id ?? 'overview')
@@ -59,8 +61,8 @@ function AuthenticatedWorkspace({ session, onLogout }: AuthenticatedWorkspacePro
       <SidebarProvider>
         <AppSidebar session={session} activeItem={activeItem} onSelect={selectItem} />
         <SidebarInset>
-          <WorkspaceHeader session={session} title={jobId ? '任务详情' : ocrJobId ? 'OCR 任务详情' : (selected?.label ?? '工作台')} onLogout={onLogout} />
-          <main className="pixel-grid flex-1 overflow-y-auto p-4 sm:p-6">
+          <WorkspaceHeader session={session} title={jobId ? '任务详情' : ocrJobId ? 'OCR 任务详情' : resumeDocumentId ? '编辑简历' : (selected?.label ?? '工作台')} onLogout={onLogout} />
+          <main className={`pixel-grid flex-1 overflow-y-auto ${activeItem === 'resume-writer' && resumeDocumentId ? 'p-3' : 'p-4 sm:p-6'}`}>
             {activeItem === 'overview' ? (
               <OverviewPanel session={session} onNavigate={selectItem} />
             ) : activeItem === 'submit' ? (
@@ -83,6 +85,13 @@ function AuthenticatedWorkspace({ session, onLogout }: AuthenticatedWorkspacePro
               <FileHistoryPanel session={session} fileKind="pdf" onOpenTask={(id) => navigate(`/workspace/tasks/${id}`)} onOpenOCRTask={(id) => navigate(`/workspace/ocr-tasks/${id}`)} />
             ) : activeItem === 'resume-projects' ? (
               <ResumeProjectPanel session={session} onOpenOCRTask={(id) => navigate(`/workspace/ocr-tasks/${id}`)} />
+            ) : activeItem === 'resume-writer' ? (
+              <ResumeWriterPanel session={session} documentId={resumeDocumentId} onOpenDocument={(id) => navigate(`/workspace/resume-writer/${id}`)} onBack={() => navigate('/workspace/resume-writer')} />
+            ) : activeItem === 'ppt-writer' ? (
+              <Card className="mx-auto max-w-5xl">
+                <CardHeader><CardTitle className="font-head text-3xl">PPT撰写</CardTitle><CardDescription>入口已经预留，本次需求暂不实现 PPT 内容编辑。</CardDescription></CardHeader>
+                <CardContent><div className="grid min-h-64 place-items-center border-2 border-dashed border-border bg-muted/40 p-8 text-center"><div><p className="font-head text-lg">COMING NEXT</p><p className="mt-2 font-mono text-xs text-muted-foreground">后续可在这里复用文档与项目素材生成演示文稿。</p></div></div></CardContent>
+              </Card>
             ) : activeItem === 'public-tasks' ? (
               <PublicTaskPanel session={session} />
             ) : activeItem === 'models' ? (

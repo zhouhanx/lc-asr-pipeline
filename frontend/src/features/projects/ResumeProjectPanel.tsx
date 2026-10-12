@@ -42,7 +42,9 @@ function projectCopyText(project: ResumeProject) {
   const addList = (title: string, values: string[]) => {
     if (values.length > 0) lines.push('', `${title}：`, ...values.map((value) => `- ${value}`))
   }
-  addList('技术栈', project.technologies)
+  if (project.technologies.length > 0) {
+    lines.push('', `技术栈：${project.technologies.join(' / ')}`)
+  }
   addList('主要职责', project.responsibilities)
   addText('项目背景', project.project_background)
   addList('项目职责', project.project_responsibilities)
@@ -51,13 +53,15 @@ function projectCopyText(project: ResumeProject) {
   return lines.filter((line, index) => line !== '' || lines[index - 1] !== '').join('\n')
 }
 
-function DetailSection({ title, text, items }: { title: string; text?: string | null; items?: string[] }) {
+function DetailSection({ title, text, items, horizontal = false }: { title: string; text?: string | null; items?: string[]; horizontal?: boolean }) {
   if (!text?.trim() && (!items || items.length === 0)) return null
   return (
     <section className="grid gap-2 border-t-2 border-border pt-5">
       <h3 className="font-head text-lg">{title}</h3>
       {text?.trim() && <p className="whitespace-pre-wrap leading-7">{text.trim()}</p>}
-      {items && items.length > 0 && <ul className="grid list-disc gap-2 pl-5 leading-7">{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul>}
+      {items && items.length > 0 && (horizontal
+        ? <div className="flex flex-wrap gap-2">{items.map((item, index) => <Badge variant="outline" key={`${title}-${index}`}>{item}</Badge>)}</div>
+        : <ul className="grid list-disc gap-2 pl-5 leading-7">{items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}</ul>)}
     </section>
   )
 }
@@ -184,7 +188,7 @@ export function ResumeProjectPanel({ session, onOpenOCRTask }: Props) {
                 {selectedProject.role_name && <p><span className="text-sm text-muted-foreground">项目角色</span><br /><strong>{selectedProject.role_name}</strong></p>}
               </div>
               <div className="mt-6 grid gap-5">
-                <DetailSection title="技术栈" items={selectedProject.technologies} />
+                <DetailSection title="技术栈" items={selectedProject.technologies} horizontal />
                 <DetailSection title="主要职责" items={selectedProject.responsibilities} />
                 <DetailSection title="项目背景" text={selectedProject.project_background} />
                 <DetailSection title="项目职责" items={selectedProject.project_responsibilities} />
