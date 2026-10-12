@@ -58,7 +58,7 @@ work_items:
 
   - id: COMMIT-001
     title: 提交并推送已验证版本到 zhouhanx/lc-asr-pipeline
-    status: in_progress
+    status: completed
     goal: platform
     required: true
     priority: P0
@@ -69,11 +69,11 @@ work_items:
       - 提交前重新执行完整测试、类型、构建和敏感信息扫描。
       - 提交范围与交接文档一致，不包含环境文件、模型权重或私人简历内容。
       - 远端为 zhouhanx/lc-asr-pipeline，作者身份为 zhouhanx。
-    next_action: 完成敏感信息扫描后提交并推送；SSH 不可用时使用 HTTPS。
+    next_action: 已推送；后续产品工作从 OCR-BENCH-001、OPS-001 或 TENANT-ADMIN-001 选择。
     summary: >
-      用户已明确要求在无本地模型验证通过后提交并推送。
-      目标仓库为 git@github.com:zhouhanx/lc-asr-pipeline.git
-      与 https://github.com/zhouhanx/lc-asr-pipeline.git。
+      2026-10-12 已提交 f6124ee 并推送到 zhouhanx/lc-asr-pipeline main。
+      作者为 zhouhanx。SSH 22 端口被本地代理关闭，实际推送使用 HTTPS。
+      未包含 .env、模型权重、私人简历或 llm-repo 日志。
 
   - id: OCR-BENCH-001
     title: 用去标识化样本比较两条本地 OCR 路线
